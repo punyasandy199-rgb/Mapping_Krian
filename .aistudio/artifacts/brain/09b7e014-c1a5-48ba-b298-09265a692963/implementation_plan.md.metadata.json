@@ -1,0 +1,6 @@
+{
+  "summary":  "Rencana implementasi aplikasi Inbound Pallet & Barcode Bin Gudang dengan input hingga 8 item, pembuatan barcode Code 128 visual, alokasi lokasi Bin terstandar, penyimpanan riwayat lokal, ekspor Excel, dan cetak label thermal.",
+  "updatedAt":  "2026-11-09T07:46:07.036148481Z",
+  "requestFeedback":  true,
+  "userFacing":  true
+}

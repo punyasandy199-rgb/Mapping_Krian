@@ -1,0 +1,6 @@
+{
+  "name": "Warehouse Pallet & Barcode Manager",
+  "description": "Aplikasi manajemen inbound gudang untuk input data pallet (hingga 8 item), generate nomor barcode Code 128, alokasi lokasi Bin, serta ekspor Excel dan cetak label thermal.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
