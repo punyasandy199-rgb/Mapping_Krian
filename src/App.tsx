@@ -14,6 +14,7 @@ import { WarehouseBinViewer } from './components/WarehouseBinViewer';
 import { BarcodeScannerModal } from './components/BarcodeScannerModal';
 import { MasterItemModal } from './components/MasterItemModal';
 import { BinDetailModal } from './components/BinDetailModal';
+import { DataBackupModal } from './components/DataBackupModal';
 import {
   Boxes,
   Barcode,
@@ -24,7 +25,8 @@ import {
   Search,
   PlusCircle,
   ShieldCheck,
-  Database
+  Database,
+  RefreshCw
 } from 'lucide-react';
 
 // Persistent storage keys with multi-version fallback to prevent data loss
@@ -84,8 +86,11 @@ function loadSavedRecords(): PalletRecord[] {
       namaBarang: 'SIC 25 BR (1 X 30 KG)',
       qtyPallet: 15,
       unit: 'Box',
-      batchAwal: 'B260101',
-      batchAkhir: 'B260150',
+      noBatch: 'B260101',
+      boxAwal: '001',
+      boxAkhir: '015',
+      batchAwal: '001',
+      batchAkhir: '015',
       lokasiBin: '5A.1',
       keterangan: 'Inbound Pallet Gudang 5',
       submittedAt: new Date(Date.now() - 3600000 * 4).toISOString()
@@ -100,8 +105,11 @@ function loadSavedRecords(): PalletRecord[] {
       namaBarang: 'SIC 8590 SD (1 X 30 KG)',
       qtyPallet: 15,
       unit: 'Box',
-      batchAwal: 'B260101',
-      batchAkhir: 'B260150',
+      noBatch: 'B260102',
+      boxAwal: '001',
+      boxAkhir: '015',
+      batchAwal: '001',
+      batchAkhir: '015',
       lokasiBin: '5A.1',
       keterangan: 'Inbound Pallet Gudang 5',
       submittedAt: new Date(Date.now() - 3600000 * 4).toISOString()
@@ -121,6 +129,7 @@ export default function App() {
   const [currentBatch, setCurrentBatch] = useState<BatchSubmission | null>(null);
   const [isScannerOpen, setIsScannerOpen] = useState(false);
   const [isMasterModalOpen, setIsMasterModalOpen] = useState(false);
+  const [isBackupModalOpen, setIsBackupModalOpen] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(false);
 
   // Bin detail viewer state (opened via QR scan or click)
@@ -215,22 +224,31 @@ export default function App() {
       .substring(2, 6)
       .toUpperCase()}`;
 
-    const newPalletRecords: PalletRecord[] = rows.map((row, idx) => ({
-      id: `plt-${Date.now()}-${idx}-${Math.random().toString(36).substring(2, 5)}`,
-      nomorPallet: row.nomorPallet.trim().toUpperCase() || `PLT-0${idx + 1}`,
-      barcodeNumber: generatePalletBarcode('PLT'),
-      batchId,
-      itemIndex: idx + 1,
-      kodeItem: row.kodeItem.trim().toUpperCase(),
-      namaBarang: row.namaBarang.trim(),
-      qtyPallet: Number(row.qtyPallet),
-      unit: row.unit || 'Box',
-      batchAwal: row.batchAwal.trim().toUpperCase(),
-      batchAkhir: row.batchAkhir.trim().toUpperCase(),
-      lokasiBin: lokasiBin.trim().toUpperCase(),
-      keterangan: row.keterangan?.trim() || '',
-      submittedAt: now.toISOString()
-    }));
+    const newPalletRecords: PalletRecord[] = rows.map((row, idx) => {
+      const boxAwalVal = (row.boxAwal || row.batchAwal || '').trim().toUpperCase();
+      const boxAkhirVal = (row.boxAkhir || row.batchAkhir || '').trim().toUpperCase();
+      const noBatchVal = (row.noBatch || '').trim().toUpperCase();
+
+      return {
+        id: `plt-${Date.now()}-${idx}-${Math.random().toString(36).substring(2, 5)}`,
+        nomorPallet: row.nomorPallet.trim().toUpperCase(), // Selalu sesuai input user (kondisikan tidak ada fallback dummy)
+        barcodeNumber: generatePalletBarcode('PLT'),
+        batchId,
+        itemIndex: idx + 1,
+        kodeItem: row.kodeItem.trim().toUpperCase(),
+        namaBarang: row.namaBarang.trim(),
+        qtyPallet: Number(row.qtyPallet),
+        unit: row.unit || 'Box',
+        noBatch: noBatchVal,
+        boxAwal: boxAwalVal,
+        boxAkhir: boxAkhirVal,
+        batchAwal: boxAwalVal, // kompatibilitas
+        batchAkhir: boxAkhirVal, // kompatibilitas
+        lokasiBin: lokasiBin.trim().toUpperCase(),
+        keterangan: row.keterangan?.trim() || '',
+        submittedAt: now.toISOString()
+      };
+    });
 
     const totalQty = newPalletRecords.reduce((sum, item) => sum + item.qtyPallet, 0);
     const palletList = Array.from(new Set(newPalletRecords.map((r) => r.nomorPallet)));
@@ -257,6 +275,50 @@ export default function App() {
 
   const handleClearAllRecords = () => {
     setRecords([]);
+  };
+
+  const handleImportBackupData = (
+    newMaster: MasterItem[],
+    newRecords: PalletRecord[],
+    mode: 'merge' | 'replace'
+  ) => {
+    if (mode === 'replace') {
+      if (newMaster && newMaster.length > 0) {
+        setMasterItems(newMaster);
+      }
+      if (newRecords) {
+        setRecords(newRecords);
+      }
+    } else {
+      // Merge unique
+      if (newMaster && newMaster.length > 0) {
+        setMasterItems((prev) => {
+          const existingCodes = new Set(prev.map((i) => i.kodeItem.toUpperCase()));
+          const combined = [...prev];
+          newMaster.forEach((item) => {
+            if (!existingCodes.has(item.kodeItem.toUpperCase())) {
+              combined.push(item);
+              existingCodes.add(item.kodeItem.toUpperCase());
+            }
+          });
+          return combined;
+        });
+      }
+
+      if (newRecords && newRecords.length > 0) {
+        setRecords((prev) => {
+          const existingBarcodes = new Set(prev.map((r) => r.barcodeNumber));
+          const combined = [...prev];
+          newRecords.forEach((rec) => {
+            if (!existingBarcodes.has(rec.barcodeNumber)) {
+              combined.push(rec);
+              existingBarcodes.add(rec.barcodeNumber);
+            }
+          });
+          return combined;
+        });
+      }
+    }
   };
 
   return (
@@ -340,6 +402,16 @@ export default function App() {
           <div className="flex items-center gap-2 whitespace-nowrap shrink-0">
             <button
               type="button"
+              onClick={() => setIsBackupModalOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/60 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 rounded-lg border border-emerald-200 dark:border-emerald-900 transition-colors"
+              title="Sinkronkan data dengan GitHub Pages via File Cadangan JSON"
+            >
+              <RefreshCw className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+              <span className="hidden sm:inline">Sinkron Data JSON</span>
+            </button>
+
+            <button
+              type="button"
               onClick={() => setIsMasterModalOpen(true)}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-950/60 hover:bg-blue-100 dark:hover:bg-blue-900/60 rounded-lg border border-blue-200 dark:border-blue-900 transition-colors"
               title="Kelola Master Database Barang & Kode Item"
@@ -421,6 +493,15 @@ export default function App() {
             <MapPin className="w-3.5 h-3.5" />
             <span>Denah Bin</span>
           </button>
+          <button
+            type="button"
+            onClick={() => setIsBackupModalOpen(true)}
+            className="flex items-center gap-1 px-2 py-1.5 rounded text-emerald-600 dark:text-emerald-400"
+            title="Sinkron Data JSON"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            <span>Sinkron</span>
+          </button>
         </div>
       </header>
 
@@ -501,6 +582,15 @@ export default function App() {
         records={records}
         isOpen={isBinModalOpen}
         onClose={() => setIsBinModalOpen(false)}
+      />
+
+      {/* JSON Backup & Cross-Domain Sync Modal */}
+      <DataBackupModal
+        isOpen={isBackupModalOpen}
+        onClose={() => setIsBackupModalOpen(false)}
+        masterItems={masterItems}
+        records={records}
+        onImportData={handleImportBackupData}
       />
     </div>
   );

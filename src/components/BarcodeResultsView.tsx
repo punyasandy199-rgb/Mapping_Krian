@@ -1,9 +1,12 @@
 import React, { useState } from 'react';
 import { PalletRecord, BatchSubmission } from '../types/warehouse';
 import { ThermalLabelCard } from './ThermalLabelCard';
+import { PrintLabelModal } from './PrintLabelModal';
 import { exportPalletsToCsv } from '../utils/exporter';
+import { downloadPalletLabelPdf } from '../utils/pdfGenerator';
 import {
   Printer,
+  FileDown,
   FileSpreadsheet,
   ArrowLeft,
   CheckCircle,
@@ -26,17 +29,34 @@ export const BarcodeResultsView: React.FC<BarcodeResultsViewProps> = ({
 }) => {
   const [selectedItemForPrint, setSelectedItemForPrint] = useState<PalletRecord | null>(null);
   const [viewMode, setViewMode] = useState<'cards' | 'table'>('cards');
+  const [isPrintModalOpen, setIsPrintModalOpen] = useState(false);
+  const [modalRecords, setModalRecords] = useState<PalletRecord[]>([]);
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
+
+  const handleOpenPrintModal = (recordsToPrint: PalletRecord[]) => {
+    setModalRecords(recordsToPrint);
+    setSelectedItemForPrint(recordsToPrint.length === 1 ? recordsToPrint[0] : null);
+    setIsPrintModalOpen(true);
+  };
 
   const handlePrintAll = () => {
-    setSelectedItemForPrint(null);
-    window.print();
+    handleOpenPrintModal(batch.items);
   };
 
   const handlePrintSingle = (record: PalletRecord) => {
-    setSelectedItemForPrint(record);
-    setTimeout(() => {
-      window.print();
-    }, 100);
+    handleOpenPrintModal([record]);
+  };
+
+  const handleDownloadAllPdf = async () => {
+    try {
+      setIsExportingPdf(true);
+      await downloadPalletLabelPdf(batch.items);
+    } catch (err) {
+      console.error(err);
+      alert('Gagal mengunduh PDF');
+    } finally {
+      setIsExportingPdf(false);
+    }
   };
 
   const handleExportCsv = () => {
@@ -96,7 +116,16 @@ export const BarcodeResultsView: React.FC<BarcodeResultsViewProps> = ({
               className="flex items-center justify-center gap-2 px-4 py-2.5 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-lg shadow-sm transition-all"
             >
               <Printer className="w-4 h-4" />
-              <span>Cetak Semua Label ({batch.items.length})</span>
+              <span>Cetak Label ({batch.items.length})</span>
+            </button>
+            <button
+              type="button"
+              onClick={handleDownloadAllPdf}
+              disabled={isExportingPdf}
+              className="flex items-center justify-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg shadow-sm transition-all disabled:opacity-50"
+            >
+              <FileDown className="w-4 h-4" />
+              <span>Unduh PDF ({batch.items.length})</span>
             </button>
             <button
               type="button"
@@ -183,7 +212,8 @@ export const BarcodeResultsView: React.FC<BarcodeResultsViewProps> = ({
                   <th className="py-3 px-3">Nama Barang</th>
                   <th className="py-3 px-3">No Barcode</th>
                   <th className="py-3 px-3 text-right">Qty</th>
-                  <th className="py-3 px-3">Batch</th>
+                  <th className="py-3 px-3">No. Batch</th>
+                  <th className="py-3 px-3">Rentang No. Box</th>
                   <th className="py-3 px-3 text-center">Aksi</th>
                 </tr>
               </thead>
@@ -214,17 +244,30 @@ export const BarcodeResultsView: React.FC<BarcodeResultsViewProps> = ({
                     <td className="py-3 px-3 text-right tabular-nums font-bold text-slate-900 dark:text-white">
                       {item.qtyPallet} {item.unit}
                     </td>
+                    <td className="py-3 px-3 font-bold text-blue-700 dark:text-blue-400 text-[11px]">
+                      {item.noBatch || '-'}
+                    </td>
                     <td className="py-3 px-3 text-slate-600 dark:text-slate-400 text-[11px]">
-                      {item.batchAwal} → {item.batchAkhir}
+                      {item.boxAwal || item.batchAwal || '-'} → {item.boxAkhir || item.batchAkhir || '-'}
                     </td>
                     <td className="py-3 px-3 text-center font-sans">
-                      <button
-                        type="button"
-                        onClick={() => handlePrintSingle(item)}
-                        className="text-xs text-blue-600 dark:text-blue-400 hover:underline flex items-center justify-center gap-1 mx-auto"
-                      >
-                        <Printer className="w-3 h-3" /> Cetak
-                      </button>
+                      <div className="flex items-center justify-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handlePrintSingle(item)}
+                          className="text-xs text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1"
+                        >
+                          <Printer className="w-3.5 h-3.5" /> Cetak
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => downloadPalletLabelPdf([item])}
+                          className="text-xs text-emerald-600 dark:text-emerald-400 hover:underline flex items-center gap-1"
+                          title="Unduh file PDF"
+                        >
+                          <FileDown className="w-3.5 h-3.5" /> PDF
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -233,6 +276,13 @@ export const BarcodeResultsView: React.FC<BarcodeResultsViewProps> = ({
           </div>
         )}
       </div>
+
+      {/* Print & PDF Modal */}
+      <PrintLabelModal
+        isOpen={isPrintModalOpen}
+        onClose={() => setIsPrintModalOpen(false)}
+        records={modalRecords}
+      />
 
       {/* Print-Only Container */}
       <div className="print-only">

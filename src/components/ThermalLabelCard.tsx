@@ -2,7 +2,8 @@ import React, { useState } from 'react';
 import { PalletRecord } from '../types/warehouse';
 import { BarcodeRenderer } from './BarcodeRenderer';
 import { QrCodeRenderer } from './QrCodeRenderer';
-import { Printer, Copy, Check, MapPin, Layers, Calendar, Hash, Tag, Box } from 'lucide-react';
+import { downloadPalletLabelPdf } from '../utils/pdfGenerator';
+import { Printer, Copy, Check, MapPin, Layers, Calendar, Hash, Tag, Box, FileDown } from 'lucide-react';
 
 interface ThermalLabelCardProps {
   record: PalletRecord;
@@ -121,24 +122,37 @@ export const ThermalLabelCard: React.FC<ThermalLabelCardProps> = ({
           </div>
         </div>
 
-        {/* Batch Range */}
+        {/* No. Batch & No. Box Range */}
         <div className="bg-slate-50 border border-slate-200 rounded p-2 mb-3">
-          <div className="text-[10px] font-bold uppercase text-slate-500 flex items-center gap-1 mb-1">
-            <Hash className="w-3 h-3 text-slate-400" /> RENTANG BATCH NUMBER
+          {/* No. Batch */}
+          <div className="flex items-center justify-between pb-1.5 mb-1.5 border-b border-slate-200">
+            <span className="text-[10px] font-bold uppercase text-slate-500 flex items-center gap-1">
+              <Hash className="w-3 h-3 text-slate-400" /> NO. BATCH:
+            </span>
+            <span className="text-xs font-mono font-black text-blue-700 bg-white px-2 py-0.5 rounded border border-blue-200">
+              {record.noBatch || '-'}
+            </span>
           </div>
-          <div className="flex items-center justify-between text-xs font-mono font-bold text-slate-900">
-            <div>
-              <span className="text-[10px] font-normal text-slate-500 block">Batch Awal</span>
-              <span className="bg-white px-2 py-0.5 rounded border border-slate-300">
-                {record.batchAwal}
-              </span>
+
+          {/* Rentang No. Box */}
+          <div>
+            <div className="text-[10px] font-bold uppercase text-slate-500 flex items-center gap-1 mb-1">
+              <Box className="w-3 h-3 text-slate-400" /> RENTANG NO. BOX
             </div>
-            <span className="text-slate-400 font-normal">s/d</span>
-            <div>
-              <span className="text-[10px] font-normal text-slate-500 block text-right">Batch Akhir</span>
-              <span className="bg-white px-2 py-0.5 rounded border border-slate-300">
-                {record.batchAkhir}
-              </span>
+            <div className="flex items-center justify-between text-xs font-mono font-bold text-slate-900">
+              <div>
+                <span className="text-[10px] font-normal text-slate-500 block">No. Box Awal</span>
+                <span className="bg-white px-2 py-0.5 rounded border border-slate-300">
+                  {record.boxAwal || record.batchAwal || '-'}
+                </span>
+              </div>
+              <span className="text-slate-400 font-normal">s/d</span>
+              <div>
+                <span className="text-[10px] font-normal text-slate-500 block text-right">No. Box Akhir</span>
+                <span className="bg-white px-2 py-0.5 rounded border border-slate-300">
+                  {record.boxAkhir || record.batchAkhir || '-'}
+                </span>
+              </div>
             </div>
           </div>
         </div>
@@ -183,16 +197,28 @@ export const ThermalLabelCard: React.FC<ThermalLabelCardProps> = ({
             )}
           </button>
 
-          {onPrintSingle && (
+          <div className="flex items-center gap-1.5">
             <button
               type="button"
-              onClick={() => onPrintSingle(record)}
-              className="flex items-center gap-1.5 text-xs font-bold text-white bg-slate-900 hover:bg-slate-800 py-1.5 px-3 rounded shadow-sm transition-colors"
+              onClick={() => downloadPalletLabelPdf([record])}
+              className="flex items-center gap-1 text-xs font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 py-1.5 px-2.5 rounded border border-emerald-300 transition-colors"
+              title="Unduh label pallet sebagai PDF"
             >
-              <Printer className="w-3.5 h-3.5" />
-              <span>Cetak Label</span>
+              <FileDown className="w-3.5 h-3.5" />
+              <span>PDF</span>
             </button>
-          )}
+
+            {onPrintSingle && (
+              <button
+                type="button"
+                onClick={() => onPrintSingle(record)}
+                className="flex items-center gap-1.5 text-xs font-bold text-white bg-slate-900 hover:bg-slate-800 py-1.5 px-3 rounded shadow-sm transition-colors"
+              >
+                <Printer className="w-3.5 h-3.5" />
+                <span>Cetak Label</span>
+              </button>
+            )}
+          </div>
         </div>
       )}
     </div>

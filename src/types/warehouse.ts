@@ -9,13 +9,16 @@ export interface MasterItem {
 
 export interface PalletRowInput {
   id: string;
-  nomorPallet: string; // Nomor pallet di setiap item
+  nomorPallet: string; // Nomor pallet di setiap item (selalu kosong di awal)
   kodeItem: string;
   namaBarang: string;
   qtyPallet: string | number;
   unit: string;
-  batchAwal: string;
-  batchAkhir: string;
+  noBatch: string; // Kolom baru: No. Batch
+  boxAwal: string; // No. Box Awal (sebelumnya Batch Awal)
+  boxAkhir: string; // No. Box Akhir (sebelumnya Batch Akhir)
+  batchAwal?: string; // kompatibilitas
+  batchAkhir?: string; // kompatibilitas
   keterangan?: string;
 }
 
@@ -29,8 +32,11 @@ export interface PalletRecord {
   namaBarang: string;
   qtyPallet: number;
   unit: string;
-  batchAwal: string;
-  batchAkhir: string;
+  noBatch: string; // No. Batch
+  boxAwal: string; // No. Box Awal
+  boxAkhir: string; // No. Box Akhir
+  batchAwal?: string; // kompatibilitas
+  batchAkhir?: string; // kompatibilitas
   lokasiBin: string; // 1x input applied to all rows in pallet
   keterangan?: string;
   submittedAt: string;

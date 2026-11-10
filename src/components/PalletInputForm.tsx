@@ -6,6 +6,7 @@ import {
   GUDANG5_SLOTS_A,
   GUDANG5_SLOTS_B
 } from '../types/warehouse';
+import { calculateBatchBoxCount } from '../utils/batchCalculator';
 import { QrCodeRenderer } from './QrCodeRenderer';
 import {
   Plus,
@@ -31,16 +32,19 @@ interface PalletInputFormProps {
   ) => void;
 }
 
-const createEmptyRow = (index: number, defaultMaster?: MasterItem): PalletRowInput => ({
+const createEmptyRow = (index: number, inheritFrom?: PalletRowInput): PalletRowInput => ({
   id: `row-${Date.now()}-${index}-${Math.random().toString(36).substr(2, 4)}`,
-  nomorPallet: `PLT-0${Math.min(index, 9)}`, // Nomor pallet di setiap item
-  kodeItem: defaultMaster?.kodeItem || '',
-  namaBarang: defaultMaster?.namaBarang || '',
-  qtyPallet: defaultMaster?.defaultQty || '',
-  unit: defaultMaster?.satuan || 'Box', // default satuan ke 'Box'
+  nomorPallet: '', // Kondisikan saat awal selalu kosong
+  kodeItem: inheritFrom?.kodeItem || '',
+  namaBarang: inheritFrom?.namaBarang || '', // saat penambahan baris mengikuti history 1 item diatasnya
+  qtyPallet: inheritFrom ? inheritFrom.qtyPallet : '',
+  unit: inheritFrom?.unit || 'Box', // default satuan ke 'Box'
+  noBatch: inheritFrom?.noBatch || '', // mewarisi batch diatasnya jika ada
+  boxAwal: '', // No. Box Awal kosong
+  boxAkhir: '', // No. Box Akhir kosong
   batchAwal: '',
   batchAkhir: '',
-  keterangan: ''
+  keterangan: inheritFrom?.keterangan || ''
 });
 
 export const PalletInputForm: React.FC<PalletInputFormProps> = ({
@@ -52,10 +56,9 @@ export const PalletInputForm: React.FC<PalletInputFormProps> = ({
   // Lokasi Bin diisi 1x saja di bagian atas (Gudang 5: 5A.1 dst)
   const [lokasiBin, setLokasiBin] = useState('5A.1');
 
-  // Multi-row items, masing-masing memiliki nomor pallet sendiri
+  // Mulai dengan 1 baris input kosong (No Pallet selalu kosong)
   const [rows, setRows] = useState<PalletRowInput[]>([
-    createEmptyRow(1, masterItems[0]),
-    createEmptyRow(2, masterItems[1])
+    createEmptyRow(1)
   ]);
 
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -66,8 +69,9 @@ export const PalletInputForm: React.FC<PalletInputFormProps> = ({
   const handleAddRow = () => {
     if (rows.length < MAX_ROWS) {
       const nextIndex = rows.length + 1;
-      const suggestedMaster = masterItems[(nextIndex - 1) % masterItems.length];
-      setRows((prev) => [...prev, createEmptyRow(nextIndex, suggestedMaster)]);
+      const previousRow = rows.length > 0 ? rows[rows.length - 1] : undefined;
+      // Saat penambahan baris barang nama barang mengikuti history yang diisi 1 item diatasnya
+      setRows((prev) => [...prev, createEmptyRow(nextIndex, previousRow)]);
     }
   };
 
@@ -86,7 +90,12 @@ export const PalletInputForm: React.FC<PalletInputFormProps> = ({
     setRows((prev) =>
       prev.map((row) => {
         if (row.id !== id) return row;
-        return { ...row, [field]: value };
+        const updated = { ...row, [field]: value };
+        if (field === 'boxAwal') updated.batchAwal = String(value);
+        if (field === 'boxAkhir') updated.batchAkhir = String(value);
+        if (field === 'batchAwal') updated.boxAwal = String(value);
+        if (field === 'batchAkhir') updated.boxAkhir = String(value);
+        return updated;
       })
     );
 
@@ -117,16 +126,19 @@ export const PalletInputForm: React.FC<PalletInputFormProps> = ({
 
   const handleFillSample = () => {
     setLokasiBin('5A.1');
-    const sampleItems = masterItems.slice(0, 4);
+    const sampleItems = masterItems.slice(0, 3);
     const newRows: PalletRowInput[] = sampleItems.map((item, idx) => ({
       id: `row-sample-${idx}-${Date.now()}`,
-      nomorPallet: `PLT-0${idx + 1}`, // Nomor pallet per item
+      nomorPallet: `PLT-0${idx + 1}`,
       kodeItem: item.kodeItem,
       namaBarang: item.namaBarang,
-      qtyPallet: item.defaultQty || 120,
+      qtyPallet: item.defaultQty || 50,
       unit: item.satuan || 'Box',
-      batchAwal: `B260${idx + 1}01`,
-      batchAkhir: `B260${idx + 1}50`,
+      noBatch: `B26010${idx + 1}`,
+      boxAwal: `001`,
+      boxAkhir: `050`,
+      batchAwal: `001`,
+      batchAkhir: `050`,
       keterangan: 'Pemeriksaan inbound OK'
     }));
     setRows(newRows);
@@ -134,7 +146,7 @@ export const PalletInputForm: React.FC<PalletInputFormProps> = ({
   };
 
   const handleReset = () => {
-    setRows([createEmptyRow(1, masterItems[0])]);
+    setRows([createEmptyRow(1)]);
     setLokasiBin('5A.1');
     setErrors({});
   };
@@ -148,14 +160,19 @@ export const PalletInputForm: React.FC<PalletInputFormProps> = ({
     }
 
     rows.forEach((row, idx) => {
+      const boxAwalVal = (row.boxAwal || row.batchAwal || '').trim();
+      const boxAkhirVal = (row.boxAkhir || row.batchAkhir || '').trim();
+
       if (!row.nomorPallet.trim()) {
         newErrors[row.id] = `Baris #${idx + 1}: Nomor Pallet wajib diisi`;
       } else if (!row.namaBarang.trim()) {
         newErrors[row.id] = `Baris #${idx + 1}: Nama Barang wajib diisi`;
+      } else if (!row.noBatch?.trim()) {
+        newErrors[row.id] = `Baris #${idx + 1}: No. Batch wajib diisi`;
       } else if (!row.qtyPallet || Number(row.qtyPallet) <= 0) {
         newErrors[row.id] = `Baris #${idx + 1}: Qty harus lebih dari 0`;
-      } else if (!row.batchAwal.trim() || !row.batchAkhir.trim()) {
-        newErrors[row.id] = `Baris #${idx + 1}: Batch awal & akhir wajib diisi`;
+      } else if (!boxAwalVal || !boxAkhirVal) {
+        newErrors[row.id] = `Baris #${idx + 1}: No. Box Awal & No. Box Akhir wajib diisi`;
       }
     });
 
@@ -367,6 +384,10 @@ export const PalletInputForm: React.FC<PalletInputFormProps> = ({
           <div className="space-y-3">
             {rows.map((row, index) => {
               const hasError = !!errors[row.id];
+              const boxCalc = calculateBatchBoxCount(
+                row.boxAwal || row.batchAwal || '',
+                row.boxAkhir || row.batchAkhir || ''
+              );
 
               return (
                 <div
@@ -425,7 +446,7 @@ export const PalletInputForm: React.FC<PalletInputFormProps> = ({
                     </div>
 
                     {/* 2. NAMA BARANG WITH KODE ITEM DISPLAYED DIRECTLY BELOW */}
-                    <div className="lg:col-span-4 relative">
+                    <div className="lg:col-span-3 relative">
                       <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
                         Nama Barang <span className="text-red-500">*</span>
                       </label>
@@ -549,40 +570,104 @@ export const PalletInputForm: React.FC<PalletInputFormProps> = ({
                       </div>
                     </div>
 
-                    {/* 4. BATCH AWAL */}
+                    {/* 4. NO. BATCH (KOLOM BARU) */}
                     <div className="lg:col-span-2">
                       <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                        Batch Awal <span className="text-red-500">*</span>
+                        No. Batch <span className="text-red-500">*</span>
                       </label>
                       <input
                         type="text"
                         required
-                        value={row.batchAwal}
+                        value={row.noBatch || ''}
                         onChange={(e) =>
-                          handleRowChange(row.id, 'batchAwal', e.target.value.toUpperCase())
+                          handleRowChange(row.id, 'noBatch', e.target.value.toUpperCase())
                         }
                         placeholder="B260101"
                         className="w-full text-sm font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-2.5 py-2 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
                       />
+                      <div className="text-[10px] text-slate-400 mt-1">
+                        Kode nomor batch
+                      </div>
                     </div>
 
-                    {/* 5. BATCH AKHIR */}
-                    <div className="lg:col-span-2">
-                      <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                        Batch Akhir <span className="text-red-500">*</span>
-                      </label>
-                      <input
-                        type="text"
-                        required
-                        value={row.batchAkhir}
-                        onChange={(e) =>
-                          handleRowChange(row.id, 'batchAkhir', e.target.value.toUpperCase())
-                        }
-                        placeholder="B260150"
-                        className="w-full text-sm font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-2.5 py-2 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      />
+                    {/* 5. NO. BOX AWAL & NO. BOX AKHIR */}
+                    <div className="lg:col-span-3">
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                            No. Box Awal <span className="text-red-500">*</span>
+                          </label>
+                          <input
+                            type="text"
+                            required
+                            value={row.boxAwal || row.batchAwal || ''}
+                            onChange={(e) =>
+                              handleRowChange(row.id, 'boxAwal', e.target.value.toUpperCase())
+                            }
+                            placeholder="001"
+                            className="w-full text-sm font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-2.5 py-2 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                            No. Box Akhir <span className="text-red-500">*</span>
+                          </label>
+                          <input
+                            type="text"
+                            required
+                            value={row.boxAkhir || row.batchAkhir || ''}
+                            onChange={(e) =>
+                              handleRowChange(row.id, 'boxAkhir', e.target.value.toUpperCase())
+                            }
+                            placeholder="050"
+                            className="w-full text-sm font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-2.5 py-2 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          />
+                        </div>
+                      </div>
+                      <div className="text-[10px] text-slate-400 mt-1">
+                        Rentang urutan box
+                      </div>
                     </div>
                   </div>
+
+                  {/* Petunjuk Total Box Otomatis dari Rentang No. Box */}
+                  {boxCalc && (
+                    <div className="mt-3 p-2.5 rounded-lg bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2 text-xs">
+                      {boxCalc.isValid ? (
+                        <>
+                          <div className="flex flex-wrap items-center gap-2 text-emerald-800 dark:text-emerald-300">
+                            <span className="font-bold flex items-center gap-1.5">
+                              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                              Petunjuk Rentang Box:
+                            </span>
+                            <span className="font-extrabold font-mono text-xs sm:text-sm bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-200 px-2.5 py-0.5 rounded border border-emerald-300 dark:border-emerald-800">
+                              {boxCalc.totalBox} Box
+                            </span>
+                            <span className="text-[11px] text-slate-500 font-mono">
+                              (No. #{boxCalc.startNum} s/d #{boxCalc.endNum})
+                            </span>
+                          </div>
+
+                          {String(row.qtyPallet) !== String(boxCalc.totalBox) && (
+                            <button
+                              type="button"
+                              onClick={() => handleRowChange(row.id, 'qtyPallet', boxCalc.totalBox)}
+                              className="text-xs font-bold text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-950/60 hover:bg-blue-100 dark:hover:bg-blue-900/60 px-2.5 py-1 rounded border border-blue-200 dark:border-blue-800 transition-colors flex items-center gap-1"
+                              title="Terapkan hasil hitungan box ke Qty / Pallet"
+                            >
+                              <span>← Terapkan ke Qty ({boxCalc.totalBox} Box)</span>
+                            </button>
+                          )}
+                        </>
+                      ) : (
+                        <div className="flex items-center gap-1.5 text-amber-700 dark:text-amber-400 font-medium text-xs">
+                          <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                          <span>{boxCalc.message}</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   {hasError && (
                     <div className="flex items-center gap-1.5 text-xs text-red-600 dark:text-red-400 mt-2 font-medium">

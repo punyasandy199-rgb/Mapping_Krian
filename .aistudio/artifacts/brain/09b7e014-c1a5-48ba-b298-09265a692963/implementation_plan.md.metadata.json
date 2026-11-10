@@ -1,6 +1,6 @@
 {
-  "summary":  "Rencana implementasi aplikasi Inbound Pallet & Barcode Bin Gudang dengan input hingga 8 item, pembuatan barcode Code 128 visual, alokasi lokasi Bin terstandar, penyimpanan riwayat lokal, ekspor Excel, dan cetak label thermal.",
-  "updatedAt":  "2026-11-09T07:46:07.036148481Z",
+  "summary":  "Rencana implementasi untuk:\n1. Petunjuk kalkulasi total box otomatis dari angka di akhir kode Batch Awal & Batch Akhir (misal B260101 s/d B260150 = 50 Box).\n2. Fitur Ekspor & Impor Data Cadangan JSON untuk menyinkronkan data antara AI Studio dan GitHub Pages antar browser/perangkat.",
+  "updatedAt":  "2026-11-09T10:08:57.541645339Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

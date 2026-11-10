@@ -17,18 +17,28 @@
 
 /* Print styling optimized for thermal and standard paper labels */
 @media print {
-  body {
+  @page {
+    size: auto;
+    margin: 5mm;
+  }
+
+  html, body {
     background-color: #ffffff !important;
     color: #000000 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
   }
 
   /* Hide everything not in print container */
-  .no-print {
+  .no-print, header, footer, nav {
     display: none !important;
   }
 
   .print-only {
     display: block !important;
+    margin: 0 auto !important;
   }
 
   .print-page-break {

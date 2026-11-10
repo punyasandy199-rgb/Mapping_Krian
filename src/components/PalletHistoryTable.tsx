@@ -1,12 +1,15 @@
 import React, { useState, useMemo } from 'react';
 import { PalletRecord } from '../types/warehouse';
 import { exportPalletsToCsv } from '../utils/exporter';
+import { downloadPalletLabelPdf, downloadPalletHistoryReportPdf } from '../utils/pdfGenerator';
 import { ThermalLabelCard } from './ThermalLabelCard';
+import { PrintLabelModal } from './PrintLabelModal';
 import {
   Search,
   Filter,
   FileSpreadsheet,
   Printer,
+  FileDown,
   Trash2,
   Barcode,
   Layers,
@@ -35,6 +38,11 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [activePrintRecord, setActivePrintRecord] = useState<PalletRecord | null>(null);
 
+  // Modal Cetak & PDF
+  const [isPrintModalOpen, setIsPrintModalOpen] = useState(false);
+  const [modalRecords, setModalRecords] = useState<PalletRecord[]>([]);
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
+
   // Filter records
   const filteredRecords = useMemo(() => {
     return records.filter((item) => {
@@ -43,10 +51,13 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
         item.namaBarang.toLowerCase().includes(q) ||
         (item.kodeItem && item.kodeItem.toLowerCase().includes(q)) ||
         (item.nomorPallet && item.nomorPallet.toLowerCase().includes(q)) ||
+        (item.noBatch && item.noBatch.toLowerCase().includes(q)) ||
         item.barcodeNumber.toLowerCase().includes(q) ||
         item.lokasiBin.toLowerCase().includes(q) ||
-        item.batchAwal.toLowerCase().includes(q) ||
-        item.batchAkhir.toLowerCase().includes(q);
+        (item.boxAwal && item.boxAwal.toLowerCase().includes(q)) ||
+        (item.boxAkhir && item.boxAkhir.toLowerCase().includes(q)) ||
+        (item.batchAwal && item.batchAwal.toLowerCase().includes(q)) ||
+        (item.batchAkhir && item.batchAkhir.toLowerCase().includes(q));
 
       const matchZone =
         selectedZone === 'ALL' ||
@@ -98,19 +109,61 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
     exportPalletsToCsv(dataToExport, 'riwayat_pallet_inbound');
   };
 
+  const handleOpenPrintModal = (recordsToPrint: PalletRecord[]) => {
+    if (!recordsToPrint || recordsToPrint.length === 0) return;
+    setModalRecords(recordsToPrint);
+    setActivePrintRecord(recordsToPrint.length === 1 ? recordsToPrint[0] : null);
+    setIsPrintModalOpen(true);
+  };
+
+  const handleQuickDownloadPdf = async (record: PalletRecord) => {
+    try {
+      setIsExportingPdf(true);
+      await downloadPalletLabelPdf([record]);
+    } catch (err) {
+      console.error(err);
+      alert('Gagal mengunduh PDF');
+    } finally {
+      setIsExportingPdf(false);
+    }
+  };
+
+  const handleQuickDownloadSelectedPdf = async () => {
+    const selectedRecords = records.filter((r) => selectedIds.has(r.id));
+    if (selectedRecords.length === 0) return;
+    try {
+      setIsExportingPdf(true);
+      await downloadPalletLabelPdf(selectedRecords);
+    } catch (err) {
+      console.error(err);
+      alert('Gagal mengunduh PDF label terpilih');
+    } finally {
+      setIsExportingPdf(false);
+    }
+  };
+
+  const handleDownloadA4Report = async () => {
+    const target = selectedIds.size > 0 ? records.filter((r) => selectedIds.has(r.id)) : filteredRecords;
+    if (target.length === 0) return;
+    try {
+      setIsExportingPdf(true);
+      await downloadPalletHistoryReportPdf(target);
+    } catch (err) {
+      console.error(err);
+      alert('Gagal mengunduh laporan PDF');
+    } finally {
+      setIsExportingPdf(false);
+    }
+  };
+
   const handlePrintRecord = (record: PalletRecord) => {
-    setActivePrintRecord(record);
-    setTimeout(() => {
-      window.print();
-    }, 100);
+    handleOpenPrintModal([record]);
   };
 
   const handlePrintSelected = () => {
-    if (selectedIds.size === 0) return;
-    setActivePrintRecord(null);
-    setTimeout(() => {
-      window.print();
-    }, 100);
+    const selectedRecords = records.filter((r) => selectedIds.has(r.id));
+    if (selectedRecords.length === 0) return;
+    handleOpenPrintModal(selectedRecords);
   };
 
   return (
@@ -184,16 +237,43 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
-            {selectedIds.size > 0 && (
-              <button
-                type="button"
-                onClick={handlePrintSelected}
-                className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg transition-colors"
-              >
-                <Printer className="w-3.5 h-3.5" />
-                <span>Cetak ({selectedIds.size})</span>
-              </button>
+          <div className="flex flex-wrap items-center gap-2">
+            {selectedIds.size > 0 ? (
+              <>
+                <button
+                  type="button"
+                  onClick={handlePrintSelected}
+                  className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg shadow-xs transition-colors"
+                  title="Buka dialog cetak ke printer / PDF"
+                >
+                  <Printer className="w-3.5 h-3.5" />
+                  <span>Cetak ({selectedIds.size})</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleQuickDownloadSelectedPdf}
+                  disabled={isExportingPdf}
+                  className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg shadow-xs transition-colors disabled:opacity-50"
+                  title="Unduh file PDF label pallet terpilih"
+                >
+                  <FileDown className="w-3.5 h-3.5" />
+                  <span>Unduh PDF ({selectedIds.size})</span>
+                </button>
+              </>
+            ) : (
+              filteredRecords.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handleDownloadA4Report}
+                  disabled={isExportingPdf}
+                  className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-lg transition-colors disabled:opacity-50"
+                  title="Unduh laporan riwayat pallet format tabel A4 (PDF)"
+                >
+                  <FileDown className="w-3.5 h-3.5 text-blue-600" />
+                  <span>Laporan PDF</span>
+                </button>
+              )
             )}
 
             <button
@@ -265,7 +345,8 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
                   <th className="py-3 px-3">Nama Barang</th>
                   <th className="py-3 px-3">No Barcode</th>
                   <th className="py-3 px-3 text-right">Qty</th>
-                  <th className="py-3 px-3">Rentang Batch</th>
+                  <th className="py-3 px-3">No. Batch</th>
+                  <th className="py-3 px-3">Rentang No. Box</th>
                   <th className="py-3 px-3">Waktu Input</th>
                   <th className="py-3 px-3 text-center">Aksi</th>
                 </tr>
@@ -317,8 +398,11 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
                         {item.qtyPallet}{' '}
                         <span className="text-[11px] font-normal text-slate-500">{item.unit}</span>
                       </td>
+                      <td className="py-3 px-3 font-mono font-bold text-blue-700 dark:text-blue-400">
+                        {item.noBatch || '-'}
+                      </td>
                       <td className="py-3 px-3 font-mono text-[11px] text-slate-600 dark:text-slate-400">
-                        {item.batchAwal} → {item.batchAkhir}
+                        {item.boxAwal || item.batchAwal || '-'} → {item.boxAkhir || item.batchAkhir || '-'}
                       </td>
                       <td className="py-3 px-3 text-slate-500 text-[11px]">
                         {new Date(item.submittedAt).toLocaleDateString('id-ID', {
@@ -333,18 +417,27 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
                           <button
                             type="button"
                             onClick={() => handlePrintRecord(item)}
-                            className="p-1 text-slate-600 hover:text-blue-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded"
-                            title="Cetak label thermal"
+                            className="p-1.5 text-slate-700 dark:text-slate-200 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-950/50 rounded-lg transition-colors"
+                            title="Buka dialog Cetak ke Printer / Unduh PDF"
                           >
-                            <Printer className="w-3.5 h-3.5" />
+                            <Printer className="w-4 h-4" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleQuickDownloadPdf(item)}
+                            disabled={isExportingPdf}
+                            className="p-1.5 text-slate-700 dark:text-slate-200 hover:text-emerald-600 dark:hover:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/50 rounded-lg transition-colors disabled:opacity-40"
+                            title="Unduh langsung file PDF label thermal (100x150 mm)"
+                          >
+                            <FileDown className="w-4 h-4" />
                           </button>
                           <button
                             type="button"
                             onClick={() => onDeleteRecord(item.id)}
-                            className="p-1 text-slate-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 rounded"
+                            className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 rounded-lg transition-colors"
                             title="Hapus baris ini"
                           >
-                            <Trash2 className="w-3.5 h-3.5" />
+                            <Trash2 className="w-4 h-4" />
                           </button>
                         </div>
                       </td>
@@ -356,6 +449,13 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
           </div>
         )}
       </div>
+
+      {/* Print & PDF Modal */}
+      <PrintLabelModal
+        isOpen={isPrintModalOpen}
+        onClose={() => setIsPrintModalOpen(false)}
+        records={modalRecords}
+      />
 
       {/* Print-Only Container */}
       <div className="print-only">
