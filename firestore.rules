@@ -1,0 +1,43 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Connection test document
+    match /test/{testId} {
+      allow read, write: if true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128;
+    }
+
+    // Pallet Records for real-time warehouse sync across operator devices
+    match /pallet_records/{recordId} {
+      allow read: if true;
+      allow create: if isValidId(recordId)
+        && request.resource.data.id is string
+        && request.resource.data.barcodeNumber is string
+        && request.resource.data.namaBarang is string
+        && request.resource.data.qtyPallet is number
+        && request.resource.data.lokasiBin is string;
+      allow update: if isValidId(recordId)
+        && request.resource.data.id == resource.data.id;
+      allow delete: if isValidId(recordId);
+    }
+
+    // Master items catalog
+    match /master_items/{itemId} {
+      allow read: if true;
+      allow create: if isValidId(itemId)
+        && request.resource.data.id is string
+        && request.resource.data.kodeItem is string
+        && request.resource.data.namaBarang is string;
+      allow update: if isValidId(itemId);
+      allow delete: if isValidId(itemId);
+    }
+  }
+}

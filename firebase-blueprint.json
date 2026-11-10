@@ -1,0 +1,69 @@
+{
+  "entities": {
+    "PalletRecord": {
+      "title": "PalletRecord",
+      "description": "A warehouse pallet record registered with barcode and bin location",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "nomorPallet": { "type": "string" },
+        "barcodeNumber": { "type": "string" },
+        "batchId": { "type": "string" },
+        "itemIndex": { "type": "number" },
+        "kodeItem": { "type": "string" },
+        "namaBarang": { "type": "string" },
+        "qtyPallet": { "type": "number" },
+        "unit": { "type": "string" },
+        "noBatch": { "type": "string" },
+        "boxAwal": { "type": "string" },
+        "boxAkhir": { "type": "string" },
+        "batchAwal": { "type": "string" },
+        "batchAkhir": { "type": "string" },
+        "lokasiBin": { "type": "string" },
+        "keterangan": { "type": "string" },
+        "submittedAt": { "type": "string" }
+      },
+      "required": [
+        "id",
+        "barcodeNumber",
+        "namaBarang",
+        "qtyPallet",
+        "lokasiBin",
+        "submittedAt"
+      ]
+    },
+    "MasterItem": {
+      "title": "MasterItem",
+      "description": "Warehouse SKU catalog item",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "kodeItem": { "type": "string" },
+        "namaBarang": { "type": "string" },
+        "satuan": { "type": "string" },
+        "defaultQty": { "type": "number" },
+        "kategori": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": [
+        "id",
+        "kodeItem",
+        "namaBarang"
+      ]
+    }
+  },
+  "firestore": {
+    "/pallet_records/{recordId}": {
+      "schema": {
+        "$ref": "#/entities/PalletRecord"
+      },
+      "description": "Collection of inbound pallet records synced across warehouse devices"
+    },
+    "/master_items/{itemId}": {
+      "schema": {
+        "$ref": "#/entities/MasterItem"
+      },
+      "description": "Catalog of warehouse products and SKUs"
+    }
+  }
+}

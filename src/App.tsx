@@ -16,6 +16,16 @@ import { MasterItemModal } from './components/MasterItemModal';
 import { BinDetailModal } from './components/BinDetailModal';
 import { DataBackupModal } from './components/DataBackupModal';
 import {
+  subscribeToPalletRecords,
+  savePalletRecordsBatch,
+  deletePalletRecord,
+  clearAllPalletRecords,
+  subscribeToMasterItems,
+  saveMasterItem,
+  deleteMasterItem,
+  seedMasterItems
+} from './services/firebase';
+import {
   Boxes,
   Barcode,
   History,
@@ -26,7 +36,9 @@ import {
   PlusCircle,
   ShieldCheck,
   Database,
-  RefreshCw
+  RefreshCw,
+  Cloud,
+  CheckCircle2
 } from 'lucide-react';
 
 // Persistent storage keys with multi-version fallback to prevent data loss
@@ -67,54 +79,22 @@ function loadSavedRecords(): PalletRecord[] {
       const stored = localStorage.getItem(key);
       if (stored) {
         const parsed = JSON.parse(stored);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed;
+        if (Array.isArray(parsed)) {
+          // Filter out demo data to keep history completely clean
+          const cleaned = parsed.filter(
+            (r) => r && r.id && !String(r.id).startsWith('demo-')
+          );
+          if (cleaned.length !== parsed.length) {
+            localStorage.setItem(key, JSON.stringify(cleaned));
+          }
+          return cleaned;
         }
       }
     }
   } catch (e) {
     console.error('Failed to load pallet records from storage:', e);
   }
-  return [
-    {
-      id: 'demo-1',
-      nomorPallet: 'PLT-01',
-      barcodeNumber: 'PLT-261108-7H9K',
-      batchId: 'BCH-261108-01',
-      itemIndex: 1,
-      kodeItem: '00J.KPI18.K030706',
-      namaBarang: 'SIC 25 BR (1 X 30 KG)',
-      qtyPallet: 15,
-      unit: 'Box',
-      noBatch: 'B260101',
-      boxAwal: '001',
-      boxAkhir: '015',
-      batchAwal: '001',
-      batchAkhir: '015',
-      lokasiBin: '5A.1',
-      keterangan: 'Inbound Pallet Gudang 5',
-      submittedAt: new Date(Date.now() - 3600000 * 4).toISOString()
-    },
-    {
-      id: 'demo-2',
-      nomorPallet: 'PLT-02',
-      barcodeNumber: 'PLT-261108-3M4P',
-      batchId: 'BCH-261108-01',
-      itemIndex: 2,
-      kodeItem: '00J.KPI18.K030707',
-      namaBarang: 'SIC 8590 SD (1 X 30 KG)',
-      qtyPallet: 15,
-      unit: 'Box',
-      noBatch: 'B260102',
-      boxAwal: '001',
-      boxAkhir: '015',
-      batchAwal: '001',
-      batchAkhir: '015',
-      lokasiBin: '5A.1',
-      keterangan: 'Inbound Pallet Gudang 5',
-      submittedAt: new Date(Date.now() - 3600000 * 4).toISOString()
-    }
-  ];
+  return []; // Default kosong (riwayat pallet diawali bersih)
 }
 
 export default function App() {
@@ -159,11 +139,42 @@ export default function App() {
     }
   }, [isDarkMode]);
 
-  // Persist records across all storage keys
+  const [isCloudConnected, setIsCloudConnected] = useState(false);
+
+  // Real-time synchronization with Cloud Firestore across multiple devices
+  useEffect(() => {
+    // 1. Subscribe to Pallet Records in real-time
+    const unsubscribeRecords = subscribeToPalletRecords(
+      (cloudRecords) => {
+        // Filter out demo data
+        const cleanRecords = cloudRecords.filter(
+          (r) => r && r.id && !String(r.id).startsWith('demo-')
+        );
+        setRecords(cleanRecords);
+        setIsCloudConnected(true);
+      },
+      (error) => {
+        console.warn('Real-time listener notice:', error);
+      }
+    );
+
+    // 2. Subscribe to Master Items in real-time
+    const unsubscribeMaster = subscribeToMasterItems((cloudMaster) => {
+      if (cloudMaster && cloudMaster.length > 0) {
+        setMasterItems(cloudMaster);
+      }
+    });
+
+    return () => {
+      unsubscribeRecords();
+      unsubscribeMaster();
+    };
+  }, []);
+
+  // Persist records across all storage keys as local cache
   useEffect(() => {
     try {
       const dataStr = JSON.stringify(records);
-      MASTER_STORAGE_KEYS.forEach(() => {});
       RECORD_STORAGE_KEYS.forEach((key) => {
         localStorage.setItem(key, dataStr);
       });
@@ -184,13 +195,14 @@ export default function App() {
     }
   }, [masterItems]);
 
-  // Add Master Item
+  // Add Master Item (saves locally & syncs to cloud)
   const handleAddMasterItem = (newItem: Omit<MasterItem, 'id'>) => {
     const item: MasterItem = {
       ...newItem,
       id: `itm-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`
     };
     setMasterItems((prev) => [item, ...prev]);
+    saveMasterItem(item).catch((err) => console.error('Cloud save item error:', err));
   };
 
   // Update Master Item (Edit existing item)
@@ -198,11 +210,13 @@ export default function App() {
     setMasterItems((prev) =>
       prev.map((item) => (item.id === updatedItem.id ? updatedItem : item))
     );
+    saveMasterItem(updatedItem).catch((err) => console.error('Cloud update item error:', err));
   };
 
   // Delete Master Item
   const handleDeleteMasterItem = (id: string) => {
     setMasterItems((prev) => prev.filter((item) => item.id !== id));
+    deleteMasterItem(id).catch((err) => console.error('Cloud delete item error:', err));
   };
 
   // Open Bin Details Modal (for QR scan or direct click)
@@ -267,14 +281,30 @@ export default function App() {
     setRecords((prev) => [...newPalletRecords, ...prev]);
     setCurrentBatch(newBatch);
     setActiveTab('results');
+
+    // SYNC TO CLOUD DATABASE (Updates all connected phones, tablets, and PCs in real-time)
+    savePalletRecordsBatch(newPalletRecords).catch((err) => {
+      console.error('Failed to sync new pallet records to cloud:', err);
+    });
   };
 
   const handleDeleteRecord = (id: string) => {
     setRecords((prev) => prev.filter((r) => r.id !== id));
+    deletePalletRecord(id).catch((err) => {
+      console.error('Failed to delete pallet record from cloud:', err);
+    });
   };
 
   const handleClearAllRecords = () => {
+    RECORD_STORAGE_KEYS.forEach((key) => {
+      try {
+        localStorage.removeItem(key);
+      } catch (e) {}
+    });
     setRecords([]);
+    clearAllPalletRecords().catch((err) => {
+      console.error('Failed to clear cloud pallet records:', err);
+    });
   };
 
   const handleImportBackupData = (
@@ -285,9 +315,11 @@ export default function App() {
     if (mode === 'replace') {
       if (newMaster && newMaster.length > 0) {
         setMasterItems(newMaster);
+        seedMasterItems(newMaster).catch(() => {});
       }
       if (newRecords) {
         setRecords(newRecords);
+        savePalletRecordsBatch(newRecords).catch(() => {});
       }
     } else {
       // Merge unique
@@ -303,6 +335,7 @@ export default function App() {
           });
           return combined;
         });
+        seedMasterItems(newMaster).catch(() => {});
       }
 
       if (newRecords && newRecords.length > 0) {
@@ -317,6 +350,7 @@ export default function App() {
           });
           return combined;
         });
+        savePalletRecordsBatch(newRecords).catch(() => {});
       }
     }
   };
@@ -326,18 +360,38 @@ export default function App() {
       {/* Top Bar Contract (Strict 3-zone contract) */}
       <header className="no-print bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 sticky top-0 z-40">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-8">
-          {/* Zone 1: Brand wordmark */}
-          <div className="flex items-center gap-2.5 whitespace-nowrap shrink-0">
-            <div className="w-9 h-9 rounded-xl bg-blue-600 flex items-center justify-center text-white shadow-sm">
-              <Boxes className="w-5 h-5" />
+          {/* Zone 1: Brand wordmark & Realtime Cloud Status */}
+          <div className="flex items-center gap-3 whitespace-nowrap shrink-0">
+            <div className="flex items-center gap-2.5">
+              <div className="w-9 h-9 rounded-xl bg-blue-600 flex items-center justify-center text-white shadow-sm">
+                <Boxes className="w-5 h-5" />
+              </div>
+              <div>
+                <span className="text-base font-extrabold tracking-tight text-slate-950 dark:text-white block leading-none">
+                  PalletTrack Gudang 5
+                </span>
+                <span className="text-[10px] text-slate-500 font-mono">
+                  Code 128 · QR Bin 5A.1
+                </span>
+              </div>
             </div>
-            <div>
-              <span className="text-base font-extrabold tracking-tight text-slate-950 dark:text-white block leading-none">
-                PalletTrack Gudang 5
-              </span>
-              <span className="text-[10px] text-slate-500 font-mono">
-                Code 128 · QR Bin 5A.1
-              </span>
+
+            {/* Realtime Cloud Sync Badge */}
+            <div
+              className={`hidden xl:flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold border ${
+                isCloudConnected
+                  ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border-emerald-300 dark:border-emerald-800'
+                  : 'bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border-amber-300 dark:border-amber-800'
+              }`}
+              title="Data tersinkronisasi otomatis real-time lintas seluruh perangkat operator gudang via Cloud Firestore"
+            >
+              <span
+                className={`w-2 h-2 rounded-full ${
+                  isCloudConnected ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'
+                }`}
+              ></span>
+              <Cloud className="w-3 h-3" />
+              <span>Realtime Cloud {isCloudConnected ? 'Aktif' : 'Menyambungkan...'}</span>
             </div>
           </div>
 
