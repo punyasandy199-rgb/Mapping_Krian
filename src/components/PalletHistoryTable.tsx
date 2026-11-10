@@ -1,9 +1,15 @@
 import React, { useState, useMemo } from 'react';
-import { PalletRecord } from '../types/warehouse';
+import { PalletRecord, GUDANG5_QUICK_BINS } from '../types/warehouse';
 import { exportPalletsToCsv } from '../utils/exporter';
-import { downloadPalletLabelPdf, downloadPalletHistoryReportPdf } from '../utils/pdfGenerator';
+import {
+  downloadPalletLabelPdf,
+  downloadPalletHistoryReportPdf,
+  downloadBinManifestPdf
+} from '../utils/pdfGenerator';
 import { ThermalLabelCard } from './ThermalLabelCard';
 import { PrintLabelModal } from './PrintLabelModal';
+import { PrintBinManifestModal } from './PrintBinManifestModal';
+import { QrCodeRenderer } from './QrCodeRenderer';
 import {
   Search,
   Filter,
@@ -17,7 +23,13 @@ import {
   CheckSquare,
   Square,
   Box,
-  Tag
+  Tag,
+  LayoutGrid,
+  Table as TableIcon,
+  ChevronDown,
+  ExternalLink,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 
 interface PalletHistoryTableProps {
@@ -34,14 +46,44 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
   onNewInput
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
-  const [selectedZone, setSelectedZone] = useState<string>('ALL');
+  const [selectedBinFilter, setSelectedBinFilter] = useState<string>('ALL');
+  const [displayMode, setDisplayMode] = useState<'per_bin' | 'flat'>('per_bin');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [activePrintRecord, setActivePrintRecord] = useState<PalletRecord | null>(null);
 
-  // Modal Cetak & PDF
+  // Per-Bin Accordion state: by default collapsed ("list per bin tidak perlu dilihatkan")
+  const [expandedBinCodes, setExpandedBinCodes] = useState<Set<string>>(new Set());
+
+  const toggleExpandBin = (binCode: string) => {
+    setExpandedBinCodes((prev) => {
+      const next = new Set(prev);
+      if (next.has(binCode)) {
+        next.delete(binCode);
+      } else {
+        next.add(binCode);
+      }
+      return next;
+    });
+  };
+
+  const handleToggleAllBins = () => {
+    if (expandedBinCodes.size === groupedBins.length) {
+      setExpandedBinCodes(new Set());
+    } else {
+      setExpandedBinCodes(new Set(groupedBins.map((g) => g.binCode)));
+    }
+  };
+
+  // Modal Cetak Label Thermal
   const [isPrintModalOpen, setIsPrintModalOpen] = useState(false);
   const [modalRecords, setModalRecords] = useState<PalletRecord[]>([]);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
+
+  // Modal Cetak Manifest Lembar Bin
+  const [binManifestTarget, setBinManifestTarget] = useState<{
+    binCode: string;
+    records: PalletRecord[];
+  } | null>(null);
 
   // Filter records
   const filteredRecords = useMemo(() => {
@@ -59,13 +101,54 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
         (item.batchAwal && item.batchAwal.toLowerCase().includes(q)) ||
         (item.batchAkhir && item.batchAkhir.toLowerCase().includes(q));
 
-      const matchZone =
-        selectedZone === 'ALL' ||
-        item.lokasiBin.toUpperCase().startsWith(selectedZone);
+      // Filter by Bin or Zone
+      let matchBin = true;
+      if (selectedBinFilter === 'ALL') {
+        matchBin = true;
+      } else if (selectedBinFilter === '5A') {
+        matchBin = item.lokasiBin.toUpperCase().startsWith('5A');
+      } else if (selectedBinFilter === '5B') {
+        matchBin = item.lokasiBin.toUpperCase().startsWith('5B');
+      } else {
+        matchBin = item.lokasiBin.toUpperCase() === selectedBinFilter.toUpperCase();
+      }
 
-      return matchSearch && matchZone;
+      return matchSearch && matchBin;
     });
-  }, [records, searchTerm, selectedZone]);
+  }, [records, searchTerm, selectedBinFilter]);
+
+  // Group filtered records by Bin (Auto-aggregating per Bin when new pallets are added)
+  const groupedBins = useMemo(() => {
+    const map: Record<string, PalletRecord[]> = {};
+    filteredRecords.forEach((item) => {
+      const bin = (item.lokasiBin || 'UNKNOWN').toUpperCase();
+      if (!map[bin]) {
+        map[bin] = [];
+      }
+      map[bin].push(item);
+    });
+
+    return Object.keys(map)
+      .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+      .map((binCode) => {
+        const items = map[binCode];
+        const uniquePallets = new Set(items.map((r) => r.nomorPallet || r.id)).size;
+        const totalQty = items.reduce((sum, r) => sum + (Number(r.qtyPallet) || 0), 0);
+        return {
+          binCode,
+          items,
+          uniquePallets,
+          totalQty
+        };
+      });
+  }, [filteredRecords]);
+
+  // Dynamic available bins in dropdown
+  const allAvailableBins = useMemo(() => {
+    const activeBins = Array.from(new Set(records.map((r) => r.lokasiBin.toUpperCase())));
+    const set = new Set([...GUDANG5_QUICK_BINS, ...activeBins]);
+    return Array.from(set).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  }, [records]);
 
   // Statistics
   const totalQty = useMemo(() => {
@@ -166,6 +249,22 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
     handleOpenPrintModal(selectedRecords);
   };
 
+  const handleOpenBinManifestModal = (binCode: string, items: PalletRecord[]) => {
+    setBinManifestTarget({ binCode, records: items });
+  };
+
+  const handleDownloadBinManifest = async (binCode: string, items: PalletRecord[]) => {
+    try {
+      setIsExportingPdf(true);
+      await downloadBinManifestPdf(binCode, items);
+    } catch (err) {
+      console.error(err);
+      alert('Gagal mengunduh PDF kartu bin');
+    } finally {
+      setIsExportingPdf(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       {/* Screen Interactive UI */}
@@ -195,7 +294,7 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
               <Layers className="w-3.5 h-3.5 text-emerald-600" /> Total Qty Inbound
             </div>
             <div className="text-2xl font-bold font-mono tabular-nums text-slate-900 dark:text-white mt-1">
-              {totalQty.toLocaleString('id-ID')}
+              {totalQty.toLocaleString('id-ID')} <span className="text-xs font-normal text-slate-500">Box</span>
             </div>
           </div>
 
@@ -210,33 +309,75 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
         </div>
 
         {/* Search, Filter & Action Toolbar */}
-        <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs">
-          <div className="flex flex-1 items-center gap-2">
-            <div className="relative flex-1 max-w-md">
+        <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3 bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs">
+          <div className="flex flex-1 flex-wrap items-center gap-2">
+            {/* Search Input */}
+            <div className="relative flex-1 min-w-[200px] max-w-md">
               <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
               <input
                 type="text"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                placeholder="Cari no pallet, kode item, nama barang, bin..."
+                placeholder="Cari no pallet, kode item, nama barang, batch, bin..."
                 className="w-full pl-9 pr-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
             </div>
 
-            <div className="flex items-center gap-1">
-              <Filter className="w-3.5 h-3.5 text-slate-400 hidden sm:block" />
+            {/* Filter Per Bin Specific */}
+            <div className="flex items-center gap-1.5">
+              <Filter className="w-3.5 h-3.5 text-slate-400" />
               <select
-                value={selectedZone}
-                onChange={(e) => setSelectedZone(e.target.value)}
-                className="text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-2.5 py-2 text-slate-800 dark:text-slate-200 focus:outline-none"
+                value={selectedBinFilter}
+                onChange={(e) => setSelectedBinFilter(e.target.value)}
+                className="text-xs font-semibold bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-2.5 py-2 text-slate-800 dark:text-slate-200 focus:outline-none"
               >
-                <option value="ALL">Semua Lokasi Bin</option>
-                <option value="5A">Gudang 5 Sisi A (5A.*)</option>
-                <option value="5B">Gudang 5 Sisi B (5B.*)</option>
+                <option value="ALL">Semua Bin (Gudang 5)</option>
+                <optgroup label="Kelompok Sisi">
+                  <option value="5A">Gudang 5 Sisi A (5A.*)</option>
+                  <option value="5B">Gudang 5 Sisi B (5B.*)</option>
+                </optgroup>
+                <optgroup label="Pilih Per Bin Saja">
+                  {allAvailableBins.map((bin) => (
+                    <option key={bin} value={bin}>
+                      Bin {bin}
+                    </option>
+                  ))}
+                </optgroup>
               </select>
+            </div>
+
+            {/* Display Mode Switch: Per Bin vs Flat Table */}
+            <div className="flex items-center p-0.5 bg-slate-100 dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700 text-xs">
+              <button
+                type="button"
+                onClick={() => setDisplayMode('per_bin')}
+                className={`flex items-center gap-1 px-2.5 py-1.5 rounded-md font-semibold transition-colors ${
+                  displayMode === 'per_bin'
+                    ? 'bg-white dark:bg-slate-900 text-blue-700 dark:text-blue-300 shadow-xs'
+                    : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                }`}
+                title="Kelompokkan data per lokasi Bin (memudahkan cek muatan per bin)"
+              >
+                <LayoutGrid className="w-3.5 h-3.5" />
+                <span>Per Bin ({groupedBins.length})</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setDisplayMode('flat')}
+                className={`flex items-center gap-1 px-2.5 py-1.5 rounded-md font-semibold transition-colors ${
+                  displayMode === 'flat'
+                    ? 'bg-white dark:bg-slate-900 text-blue-700 dark:text-blue-300 shadow-xs'
+                    : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                }`}
+                title="Tampilkan semua baris pallet dalam satu tabel datar"
+              >
+                <TableIcon className="w-3.5 h-3.5" />
+                <span>Semua Baris ({filteredRecords.length})</span>
+              </button>
             </div>
           </div>
 
+          {/* Action Toolbar */}
           <div className="flex flex-wrap items-center gap-2">
             {selectedIds.size > 0 ? (
               <>
@@ -247,7 +388,7 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
                   title="Buka dialog cetak ke printer / PDF"
                 >
                   <Printer className="w-3.5 h-3.5" />
-                  <span>Cetak ({selectedIds.size})</span>
+                  <span>Cetak Label ({selectedIds.size})</span>
                 </button>
 
                 <button
@@ -303,15 +444,19 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
           </div>
         </div>
 
-        {/* Table Content */}
+        {/* Content Render: Empty vs Per Bin vs Flat Table */}
         {filteredRecords.length === 0 ? (
           <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-12 text-center">
             <Barcode className="w-12 h-12 text-slate-300 dark:text-slate-700 mx-auto mb-3" />
             <h3 className="text-base font-bold text-slate-800 dark:text-slate-200">
-              Belum ada data pallet tersimpan
+              {selectedBinFilter !== 'ALL'
+                ? `Belum ada muatan di Bin ${selectedBinFilter}`
+                : 'Belum ada data pallet tersimpan'}
             </h3>
             <p className="text-xs text-slate-500 max-w-sm mx-auto mt-1 mb-4">
-              Silakan input nomor pallet, lokasi Bin (cth: 5A.1), dan hingga 8 data barang untuk menerbitkan barcode pertama.
+              {selectedBinFilter !== 'ALL'
+                ? `Bin ${selectedBinFilter} masih kosong. Silakan input pallet dan alokasikan ke bin ini.`
+                : 'Silakan input nomor pallet, lokasi Bin (cth: 5A.1), dan data barang untuk menerbitkan barcode pertama.'}
             </p>
             <button
               type="button"
@@ -321,7 +466,293 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
               + Input Pallet Sekarang
             </button>
           </div>
+        ) : displayMode === 'per_bin' ? (
+          /* ============================================================ */
+          /* MODE 1: RIWAYAT PER LOKASI BIN (GROUPED BY BIN)               */
+          /* ============================================================ */
+          <div className="space-y-4">
+            {/* Quick Helper Bar */}
+            <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400 px-1">
+              <span>
+                Menampilkan <strong>{groupedBins.length}</strong> Bin di Gudang 5 · Klik tombol ikon{' '}
+                <strong>mata</strong> untuk melihat rincian muatan tiap bin.
+              </span>
+              <button
+                type="button"
+                onClick={handleToggleAllBins}
+                className="text-blue-600 dark:text-blue-400 hover:underline font-semibold flex items-center gap-1"
+              >
+                {expandedBinCodes.size === groupedBins.length ? (
+                  <>
+                    <EyeOff className="w-3.5 h-3.5" /> Sembunyikan Semua
+                  </>
+                ) : (
+                  <>
+                    <Eye className="w-3.5 h-3.5" /> Buka Semua Detail
+                  </>
+                )}
+              </button>
+            </div>
+
+            {groupedBins.map((binGroup) => {
+              const isExpanded = expandedBinCodes.has(binGroup.binCode);
+              const scanUrl =
+                typeof window !== 'undefined'
+                  ? `${window.location.origin}${window.location.pathname}?bin=${encodeURIComponent(
+                      binGroup.binCode
+                    )}`
+                  : `?bin=${binGroup.binCode}`;
+
+              // Dominant item names for compact preview
+              const distinctItems = Array.from(
+                new Set(binGroup.items.map((r) => r.namaBarang).filter(Boolean))
+              );
+
+              // Sort newest first: row 1 is the latest added pallet
+              const sortedItems = [...binGroup.items].sort(
+                (a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime()
+              );
+
+              return (
+                <div
+                  key={binGroup.binCode}
+                  className="bg-white dark:bg-slate-900 rounded-xl border-2 border-slate-200 dark:border-slate-800 shadow-xs overflow-hidden transition-all"
+                >
+                  {/* Bin Header Card Banner */}
+                  <div className="bg-slate-50 dark:bg-slate-800/80 p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <div className="p-2.5 bg-blue-600 text-white rounded-xl shadow-xs">
+                        <MapPin className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h3 className="text-lg font-black font-mono text-slate-900 dark:text-white">
+                            LOKASI BIN: {binGroup.binCode}
+                          </h3>
+                          <span className="text-[11px] font-bold font-mono px-2 py-0.5 rounded bg-blue-100 dark:bg-blue-950 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-900">
+                            Gudang 5
+                          </span>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2.5 mt-1 text-xs text-slate-600 dark:text-slate-300 font-mono">
+                          <span className="flex items-center gap-1 font-bold text-slate-900 dark:text-white">
+                            <Box className="w-3.5 h-3.5 text-blue-600" /> {binGroup.uniquePallets} Pallet
+                          </span>
+                          <span>•</span>
+                          <span className="flex items-center gap-1 font-bold text-slate-900 dark:text-white">
+                            <Layers className="w-3.5 h-3.5 text-emerald-600" /> {binGroup.totalQty.toLocaleString('id-ID')} Box
+                          </span>
+                          <span>•</span>
+                          <span className="text-slate-500 font-sans">
+                            {binGroup.items.length} Baris Muatan
+                          </span>
+                          {distinctItems.length > 0 && (
+                            <>
+                              <span>•</span>
+                              <span className="font-sans font-bold text-slate-800 dark:text-slate-200 truncate max-w-[240px]">
+                                {distinctItems.join(' / ')}
+                              </span>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Bin Actions */}
+                    <div className="flex items-center gap-2 w-full sm:w-auto justify-between sm:justify-end">
+                      <div className="shrink-0 bg-white p-1 rounded border border-slate-200 dark:border-slate-700 hidden sm:block">
+                        <QrCodeRenderer
+                          value={scanUrl}
+                          size={46}
+                          showLabel={false}
+                          className="p-0 border-0 shadow-none"
+                        />
+                      </div>
+
+                      <div className="flex items-center gap-1.5">
+                        {/* Eye Toggle Button (Icon only) */}
+                        <button
+                          type="button"
+                          onClick={() => toggleExpandBin(binGroup.binCode)}
+                          className={`p-2 rounded-lg border transition-all ${
+                            isExpanded
+                              ? 'bg-blue-600 text-white border-blue-600 shadow-xs'
+                              : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800'
+                          }`}
+                          title={isExpanded ? 'Sembunyikan daftar muatan bin ini' : 'Buka & lihat detail muatan bin ini'}
+                        >
+                          {isExpanded ? (
+                            <EyeOff className="w-4 h-4" />
+                          ) : (
+                            <Eye className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                          )}
+                        </button>
+
+                        {/* PDF Download Button (Icon only) */}
+                        <button
+                          type="button"
+                          onClick={() => handleDownloadBinManifest(binGroup.binCode, binGroup.items)}
+                          disabled={isExportingPdf}
+                          className="p-2 text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/60 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 rounded-lg border border-emerald-300 dark:border-emerald-800 transition-colors disabled:opacity-50"
+                          title="Unduh PDF Lembar Bin"
+                        >
+                          <FileDown className="w-4 h-4" />
+                        </button>
+
+                        {/* Print Button (Icon only) */}
+                        <button
+                          type="button"
+                          onClick={() => handleOpenBinManifestModal(binGroup.binCode, binGroup.items)}
+                          className="p-2 text-white bg-slate-900 hover:bg-slate-800 rounded-lg shadow-xs transition-colors"
+                          title="Cetak Lembar Bin"
+                        >
+                          <Printer className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Table of items in this specific bin (Only shown when expanded via Eye button) */}
+                  {isExpanded && (
+                    <div className="overflow-x-auto border-t border-slate-200 dark:border-slate-800">
+                      <table className="w-full text-left text-xs border-collapse">
+                        <thead>
+                          <tr className="bg-slate-100/70 dark:bg-slate-800/40 border-b border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300 font-semibold">
+                            <th className="py-2.5 px-3 w-10 text-center">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const allInBinSelected = sortedItems.every((i) => selectedIds.has(i.id));
+                                  setSelectedIds((prev) => {
+                                    const next = new Set(prev);
+                                    sortedItems.forEach((i) => {
+                                      if (allInBinSelected) next.delete(i.id);
+                                      else next.add(i.id);
+                                    });
+                                    return next;
+                                  });
+                                }}
+                                className="text-slate-400 hover:text-slate-700"
+                              >
+                                {sortedItems.every((i) => selectedIds.has(i.id)) ? (
+                                  <CheckSquare className="w-4 h-4 text-blue-600" />
+                                ) : (
+                                  <Square className="w-4 h-4" />
+                                )}
+                              </button>
+                            </th>
+                            <th className="py-2.5 px-3">No Pallet</th>
+                            <th className="py-2.5 px-3">Kode Item</th>
+                            <th className="py-2.5 px-3">Nama Barang</th>
+                            <th className="py-2.5 px-3 text-right">Qty</th>
+                            <th className="py-2.5 px-3">No. Batch</th>
+                            <th className="py-2.5 px-3">Rentang No. Box</th>
+                            <th className="py-2.5 px-3">No Barcode</th>
+                            <th className="py-2.5 px-3">Waktu Inbound</th>
+                            <th className="py-2.5 px-3 text-center">Aksi</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-mono">
+                          {sortedItems.map((item, rowIdx) => {
+                            const isSelected = selectedIds.has(item.id);
+
+                            return (
+                              <tr
+                                key={item.id}
+                                className={`hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors ${
+                                  isSelected ? 'bg-blue-50/50 dark:bg-blue-950/20' : ''
+                                }`}
+                              >
+                                <td className="py-2.5 px-3 text-center">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleToggleSelect(item.id)}
+                                    className="text-slate-400 hover:text-slate-700"
+                                  >
+                                    {isSelected ? (
+                                      <CheckSquare className="w-4 h-4 text-blue-600" />
+                                    ) : (
+                                      <Square className="w-4 h-4" />
+                                    )}
+                                  </button>
+                                </td>
+                                <td className="py-2.5 px-3 font-bold text-slate-900 dark:text-slate-100">
+                                  <span className="bg-amber-100 dark:bg-amber-950/60 text-amber-900 dark:text-amber-200 px-2 py-0.5 rounded border border-amber-300 dark:border-amber-900">
+                                    {item.nomorPallet || '-'}
+                                  </span>
+                                </td>
+                                <td className="py-2.5 px-3 font-bold text-blue-600 dark:text-blue-400">
+                                  {item.kodeItem || '-'}
+                                </td>
+                                <td className="py-2.5 px-3 font-sans font-medium text-slate-800 dark:text-slate-200">
+                                  {item.namaBarang}
+                                </td>
+                                <td className="py-2.5 px-3 text-right font-bold tabular-nums text-slate-900 dark:text-white">
+                                  {item.qtyPallet}{' '}
+                                  <span className="text-[11px] font-normal text-slate-500 font-sans">
+                                    {item.unit}
+                                  </span>
+                                </td>
+                                <td className="py-2.5 px-3 font-bold text-blue-700 dark:text-blue-400">
+                                  {item.noBatch || '-'}
+                                </td>
+                                <td className="py-2.5 px-3 text-[11px] text-slate-600 dark:text-slate-400">
+                                  {item.boxAwal || item.batchAwal || '-'} → {item.boxAkhir || item.batchAkhir || '-'}
+                                </td>
+                                <td className="py-2.5 px-3 text-[11px] text-slate-800 dark:text-slate-200 font-bold">
+                                  {item.barcodeNumber}
+                                </td>
+                                <td className="py-2.5 px-3 text-slate-500 text-[11px] font-sans">
+                                  {new Date(item.submittedAt).toLocaleDateString('id-ID', {
+                                    day: '2-digit',
+                                    month: 'short',
+                                    hour: '2-digit',
+                                    minute: '2-digit'
+                                  })}
+                                </td>
+                                <td className="py-2.5 px-3 text-center font-sans">
+                                  <div className="flex items-center justify-center gap-1.5">
+                                    <button
+                                      type="button"
+                                      onClick={() => handlePrintRecord(item)}
+                                      className="p-1.5 text-slate-700 dark:text-slate-200 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-950/50 rounded-lg transition-colors"
+                                      title="Cetak label pallet thermal (100x150 mm)"
+                                    >
+                                      <Printer className="w-3.5 h-3.5" />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleQuickDownloadPdf(item)}
+                                      disabled={isExportingPdf}
+                                      className="p-1.5 text-slate-700 dark:text-slate-200 hover:text-emerald-600 dark:hover:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/50 rounded-lg transition-colors disabled:opacity-40"
+                                      title="Unduh file PDF label pallet thermal"
+                                    >
+                                      <FileDown className="w-3.5 h-3.5" />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => onDeleteRecord(item.id)}
+                                      className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 rounded-lg transition-colors"
+                                      title="Hapus baris ini"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         ) : (
+          /* ============================================================ */
+          /* MODE 2: TABEL FLAT SEMUA BARIS                                */
+          /* ============================================================ */
           <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-xs">
             <table className="w-full text-left text-xs border-collapse">
               <thead>
@@ -351,7 +782,7 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
                   <th className="py-3 px-3 text-center">Aksi</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-mono">
                 {filteredRecords.map((item) => {
                   const isSelected = selectedIds.has(item.id);
 
@@ -375,36 +806,36 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
                           )}
                         </button>
                       </td>
-                      <td className="py-3 px-3 font-mono font-bold text-slate-900 dark:text-slate-100">
+                      <td className="py-3 px-3 font-bold text-slate-900 dark:text-slate-100">
                         <span className="bg-amber-100 dark:bg-amber-950/60 text-amber-900 dark:text-amber-200 px-2 py-0.5 rounded font-bold border border-amber-300 dark:border-amber-900">
                           {item.nomorPallet || '-'}
                         </span>
                       </td>
-                      <td className="py-3 px-3 font-mono">
+                      <td className="py-3 px-3">
                         <span className="text-xs font-bold text-blue-700 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/60 px-2 py-0.5 rounded border border-blue-200 dark:border-blue-900">
                           {item.lokasiBin}
                         </span>
                       </td>
-                      <td className="py-3 px-3 font-mono font-bold text-blue-600 dark:text-blue-400">
+                      <td className="py-3 px-3 font-bold text-blue-600 dark:text-blue-400">
                         {item.kodeItem || '-'}
                       </td>
-                      <td className="py-3 px-3 font-medium text-slate-800 dark:text-slate-200">
+                      <td className="py-3 px-3 font-sans font-medium text-slate-800 dark:text-slate-200">
                         {item.namaBarang}
                       </td>
-                      <td className="py-3 px-3 font-mono font-semibold text-slate-900 dark:text-slate-100">
+                      <td className="py-3 px-3 font-semibold text-slate-900 dark:text-slate-100">
                         {item.barcodeNumber}
                       </td>
-                      <td className="py-3 px-3 text-right font-mono font-bold tabular-nums text-slate-900 dark:text-white">
+                      <td className="py-3 px-3 text-right font-bold tabular-nums text-slate-900 dark:text-white">
                         {item.qtyPallet}{' '}
-                        <span className="text-[11px] font-normal text-slate-500">{item.unit}</span>
+                        <span className="text-[11px] font-normal text-slate-500 font-sans">{item.unit}</span>
                       </td>
-                      <td className="py-3 px-3 font-mono font-bold text-blue-700 dark:text-blue-400">
+                      <td className="py-3 px-3 font-bold text-blue-700 dark:text-blue-400">
                         {item.noBatch || '-'}
                       </td>
-                      <td className="py-3 px-3 font-mono text-[11px] text-slate-600 dark:text-slate-400">
+                      <td className="py-3 px-3 text-[11px] text-slate-600 dark:text-slate-400">
                         {item.boxAwal || item.batchAwal || '-'} → {item.boxAkhir || item.batchAkhir || '-'}
                       </td>
-                      <td className="py-3 px-3 text-slate-500 text-[11px]">
+                      <td className="py-3 px-3 text-slate-500 text-[11px] font-sans">
                         {new Date(item.submittedAt).toLocaleDateString('id-ID', {
                           day: '2-digit',
                           month: 'short',
@@ -412,7 +843,7 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
                           minute: '2-digit'
                         })}
                       </td>
-                      <td className="py-3 px-3 text-center">
+                      <td className="py-3 px-3 text-center font-sans">
                         <div className="flex items-center justify-center gap-1.5">
                           <button
                             type="button"
@@ -450,12 +881,22 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
         )}
       </div>
 
-      {/* Print & PDF Modal */}
+      {/* Print & PDF Modal for Pallet Thermal Labels */}
       <PrintLabelModal
         isOpen={isPrintModalOpen}
         onClose={() => setIsPrintModalOpen(false)}
         records={modalRecords}
       />
+
+      {/* Print Bin Manifest Modal for Bin Card */}
+      {binManifestTarget && (
+        <PrintBinManifestModal
+          isOpen={true}
+          onClose={() => setBinManifestTarget(null)}
+          binCode={binManifestTarget.binCode}
+          records={binManifestTarget.records}
+        />
+      )}
 
       {/* Print-Only Container */}
       <div className="print-only">

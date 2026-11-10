@@ -1,8 +1,10 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { PalletRecord } from '../types/warehouse';
 import { QrCodeRenderer } from './QrCodeRenderer';
 import { BarcodeRenderer } from './BarcodeRenderer';
 import { exportPalletsToCsv } from '../utils/exporter';
+import { downloadBinManifestPdf } from '../utils/pdfGenerator';
+import { PrintBinManifestModal } from './PrintBinManifestModal';
 import {
   MapPin,
   X,
@@ -12,7 +14,8 @@ import {
   Layers,
   Calendar,
   Barcode,
-  Tag
+  Tag,
+  FileDown
 } from 'lucide-react';
 
 interface BinDetailModalProps {
@@ -30,6 +33,9 @@ export const BinDetailModal: React.FC<BinDetailModalProps> = ({
   onClose,
   onPrintPallet
 }) => {
+  const [isPrintManifestOpen, setIsPrintManifestOpen] = useState(false);
+  const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
+
   if (!isOpen || !binCode) return null;
 
   // Filter all items stored in this Bin
@@ -41,11 +47,19 @@ export const BinDetailModal: React.FC<BinDetailModalProps> = ({
   const uniquePallets = new Set(itemsInBin.map((item) => item.nomorPallet || item.id)).size;
 
   const handleExportBin = () => {
-    exportPalletsToCsv(itemsInBin, `muatan_bin_${binCode}`);
+    exportPalletsToCsv(itemsInBin, `muatan_bin_${binCode.replace('.', '_')}`);
   };
 
-  const handlePrintAllInBin = () => {
-    window.print();
+  const handleDownloadPdf = async () => {
+    try {
+      setIsDownloadingPdf(true);
+      await downloadBinManifestPdf(binCode, itemsInBin);
+    } catch (e) {
+      console.error(e);
+      alert('Gagal mengunduh PDF');
+    } finally {
+      setIsDownloadingPdf(false);
+    }
   };
 
   // Build the direct web scan URL for this bin
@@ -149,7 +163,8 @@ export const BinDetailModal: React.FC<BinDetailModalProps> = ({
                   <th className="py-2.5 px-3">Kode Item</th>
                   <th className="py-2.5 px-3">Nama Barang</th>
                   <th className="py-2.5 px-3 text-right">Qty</th>
-                  <th className="py-2.5 px-3">Batch Awal - Akhir</th>
+                  <th className="py-2.5 px-3">No. Batch</th>
+                  <th className="py-2.5 px-3">Rentang No. Box</th>
                   <th className="py-2.5 px-3">Barcode</th>
                   <th className="py-2.5 px-3 text-center">Aksi</th>
                 </tr>
@@ -162,7 +177,7 @@ export const BinDetailModal: React.FC<BinDetailModalProps> = ({
                   >
                     <td className="py-2.5 px-3 font-mono font-bold text-slate-900 dark:text-white">
                       <span className="bg-amber-100 dark:bg-amber-950/60 text-amber-900 dark:text-amber-200 px-2 py-0.5 rounded border border-amber-300 dark:border-amber-900">
-                        {item.nomorPallet}
+                        {item.nomorPallet || '-'}
                       </span>
                     </td>
                     <td className="py-2.5 px-3 font-mono font-bold text-blue-600 dark:text-blue-400">
@@ -174,8 +189,11 @@ export const BinDetailModal: React.FC<BinDetailModalProps> = ({
                     <td className="py-2.5 px-3 text-right font-mono font-bold tabular-nums text-slate-900 dark:text-white">
                       {item.qtyPallet} <span className="font-normal text-slate-500">{item.unit}</span>
                     </td>
+                    <td className="py-2.5 px-3 font-mono font-bold text-blue-700 dark:text-blue-400">
+                      {item.noBatch || '-'}
+                    </td>
                     <td className="py-2.5 px-3 font-mono text-[11px] text-slate-600 dark:text-slate-400">
-                      {item.batchAwal} → {item.batchAkhir}
+                      {item.boxAwal || item.batchAwal || '-'} → {item.boxAkhir || item.batchAkhir || '-'}
                     </td>
                     <td className="py-2.5 px-3 font-mono text-[11px] text-slate-800 dark:text-slate-200">
                       {item.barcodeNumber}
@@ -186,7 +204,7 @@ export const BinDetailModal: React.FC<BinDetailModalProps> = ({
                           type="button"
                           onClick={() => onPrintPallet(item)}
                           className="p-1 text-slate-600 hover:text-blue-600 rounded"
-                          title="Cetak label pallet ini"
+                          title="Cetak label thermal pallet ini"
                         >
                           <Printer className="w-3.5 h-3.5" />
                         </button>
@@ -200,8 +218,8 @@ export const BinDetailModal: React.FC<BinDetailModalProps> = ({
         </div>
 
         {/* Footer Actions */}
-        <div className="pt-3 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
+        <div className="pt-3 border-t border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
               onClick={handleExportBin}
@@ -213,14 +231,28 @@ export const BinDetailModal: React.FC<BinDetailModalProps> = ({
             </button>
 
             {itemsInBin.length > 0 && (
-              <button
-                type="button"
-                onClick={handlePrintAllInBin}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg transition-colors"
-              >
-                <Printer className="w-3.5 h-3.5" />
-                <span>Cetak Semua Label Bin</span>
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={handleDownloadPdf}
+                  disabled={isDownloadingPdf}
+                  className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/60 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 rounded-lg border border-emerald-300 dark:border-emerald-800 transition-colors disabled:opacity-50"
+                  title="Unduh dokumen PDF kartu kendali muatan Bin ini"
+                >
+                  <FileDown className="w-3.5 h-3.5" />
+                  <span>Unduh PDF Bin</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setIsPrintManifestOpen(true)}
+                  className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold text-white bg-slate-900 hover:bg-slate-800 rounded-lg transition-colors shadow-sm"
+                  title="Buka dialog cetak lembar manifest kendali Bin (QR Code & Daftar Barang)"
+                >
+                  <Printer className="w-3.5 h-3.5" />
+                  <span>Cetak Lembar Bin (QR)</span>
+                </button>
+              </>
             )}
           </div>
 
@@ -232,6 +264,14 @@ export const BinDetailModal: React.FC<BinDetailModalProps> = ({
             Tutup
           </button>
         </div>
+
+        {/* Print Bin Manifest Modal */}
+        <PrintBinManifestModal
+          isOpen={isPrintManifestOpen}
+          onClose={() => setIsPrintManifestOpen(false)}
+          binCode={binCode}
+          records={itemsInBin}
+        />
       </div>
     </div>
   );

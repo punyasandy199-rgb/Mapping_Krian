@@ -257,9 +257,14 @@ export const WarehouseBinViewer: React.FC<WarehouseBinViewerProps> = ({
                   <div className="font-bold text-slate-900 dark:text-white">
                     {item.namaBarang}
                   </div>
-                  <div className="flex items-center justify-between text-slate-500 mt-1 font-mono text-[11px]">
-                    <span>Qty: {item.qtyPallet} {item.unit}</span>
-                    <span>Batch: {item.batchAwal} - {item.batchAkhir}</span>
+                  <div className="space-y-0.5 text-slate-500 mt-1 font-mono text-[11px]">
+                    <div className="flex items-center justify-between">
+                      <span>Qty: {item.qtyPallet} {item.unit}</span>
+                      <span className="text-blue-600 font-bold">Batch: {item.noBatch || '-'}</span>
+                    </div>
+                    <div className="text-[10px] text-slate-400">
+                      Box: {item.boxAwal || item.batchAwal || '-'} s/d {item.boxAkhir || item.batchAkhir || '-'}
+                    </div>
                   </div>
                 </div>
               ))}
