@@ -381,17 +381,18 @@ export async function downloadBinManifestPdf(
   records: PalletRecord[],
   filename?: string
 ): Promise<void> {
-  // 1/2 A4 (A5 Landscape: 210mm wide x 148.5mm tall) per user instruction
+  // A4 Portrait (210mm wide x 297mm tall)
+  // Formatted so the manifest is placed strictly on the top 1/2 of the A4 page (~115-120mm height)
   const doc = new jsPDF({
-    orientation: 'landscape',
+    orientation: 'portrait',
     unit: 'mm',
-    format: 'a5' // 210 x 148 mm (Ukuran 1/2 A4)
+    format: 'a4' // 210 x 297 mm
   });
 
   const pageWidth = 210;
-  const pageHeight = 148;
-  const margin = 8;
-  const contentWidth = pageWidth - margin * 2; // 194mm
+  const pageHeight = 297;
+  const margin = 10;
+  const contentWidth = pageWidth - margin * 2; // 190mm
 
   // Sort: newest input at No. 1, earliest input at the bottom (slot 8)
   const sortedRecords = sortBinRecordsByLoadingOrder(records);
@@ -403,20 +404,20 @@ export async function downloadBinManifestPdf(
   const uniquePallets = new Set(records.map((r) => r.nomorPallet || r.id)).size;
   const totalQty = records.reduce((sum, r) => sum + (Number(r.qtyPallet) || 0), 0);
 
-  // Header Box (Compact for 1/2 A4)
-  const headerHeight = 35;
-  doc.setFillColor(15, 23, 42); // slate-900
+  // Header Box (top of A4 sheet)
+  const headerHeight = 36;
+  doc.setFillColor(15, 23, 42); // slate-900 (#0f172a)
   doc.rect(margin, margin, contentWidth, headerHeight, 'F');
 
-  // Top right: GUDANG 5 badge & 1/2 A4 indicator
-  doc.setFillColor(254, 240, 138); // amber/yellow badge
-  doc.roundedRect(pageWidth - margin - 32, margin + 3, 29, 6.5, 1, 1, 'F');
+  // Top right: GUDANG 5 badge
+  doc.setFillColor(254, 240, 138); // amber/yellow badge (#fef08a)
+  doc.roundedRect(pageWidth - margin - 35, margin + 4, 30, 7, 1, 1, 'F');
   doc.setTextColor(15, 23, 42);
-  doc.setFontSize(8.5);
+  doc.setFontSize(9);
   doc.setFont('helvetica', 'bold');
-  doc.text('GUDANG 5', pageWidth - margin - 17.5, margin + 7.5, { align: 'center' });
+  doc.text('GUDANG 5', pageWidth - margin - 20, margin + 8.8, { align: 'center' });
 
-  // Large QR Code in header (24mm x 24mm)
+  // Large QR Code in header (20mm x 20mm)
   const binScanUrl =
     typeof window !== 'undefined'
       ? `${window.location.origin}${window.location.pathname}?bin=${encodeURIComponent(binCode)}`
@@ -433,12 +434,12 @@ export async function downloadBinManifestPdf(
     });
     // White background card for QR
     doc.setFillColor(255, 255, 255);
-    doc.roundedRect(pageWidth - margin - 34, margin + 10.5, 31, 23, 1, 1, 'F');
-    doc.addImage(qrDataUrl, 'PNG', pageWidth - margin - 32, margin + 11.2, 19, 19);
+    doc.roundedRect(pageWidth - margin - 37, margin + 12.5, 34, 21.5, 1, 1, 'F');
+    doc.addImage(qrDataUrl, 'PNG', pageWidth - margin - 35, margin + 13.2, 17.5, 17.5);
     doc.setFontSize(5.5);
     doc.setFont('helvetica', 'bold');
     doc.setTextColor(15, 23, 42);
-    doc.text(`SCAN BIN ${binCode}`, pageWidth - margin - 18.5, margin + 32.5, { align: 'center' });
+    doc.text(`SCAN BIN ${binCode}`, pageWidth - margin - 20, margin + 32.8, { align: 'center' });
   } catch (err) {
     console.error('Failed to generate QR in PDF', err);
   }
@@ -447,13 +448,13 @@ export async function downloadBinManifestPdf(
   doc.setTextColor(254, 240, 138); // Yellow-200
   doc.setFontSize(22);
   doc.setFont('helvetica', 'bold');
-  doc.text(`LOKASI BIN: ${binCode.toUpperCase()}`, margin + 5, margin + 14);
+  doc.text(`LOKASI BIN: ${binCode.toUpperCase()}`, margin + 6, margin + 14);
 
   doc.setTextColor(255, 255, 255);
-  doc.setFontSize(12.5);
+  doc.setFontSize(13);
   doc.setFont('helvetica', 'bold');
-  const splitItemName = doc.splitTextToSize(dominantItemName.toUpperCase(), contentWidth - 40);
-  doc.text(splitItemName, margin + 5, margin + 23);
+  const splitItemName = doc.splitTextToSize(dominantItemName.toUpperCase(), contentWidth - 45);
+  doc.text(splitItemName, margin + 6, margin + 24);
 
   // Summary Metrics Bar
   let currentY = margin + headerHeight + 3;
@@ -469,10 +470,11 @@ export async function downloadBinManifestPdf(
   doc.setFont('helvetica', 'bold');
   doc.text(`Total Pallet: ${uniquePallets} Pallet`, margin + 4, currentY + 5.2);
   doc.text(`Total Muatan: ${totalQty.toLocaleString('id-ID')} Box`, margin + 48, currentY + 5.2);
-  doc.text(`Jumlah Item: ${records.length} Baris`, margin + 100, currentY + 5.2);
+  doc.text(`Jumlah Item: ${records.length} Baris`, margin + 102, currentY + 5.2);
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(100, 116, 139);
-  doc.text(`Waktu Cetak: ${new Date().toLocaleString('id-ID')} · Format: 1/2 A4`, margin + 140, currentY + 5.2);
+  // User instruction: "format 1/2 A4 tidak perlu" - only display Waktu Cetak
+  doc.text(`Waktu Cetak: ${new Date().toLocaleString('id-ID')}`, margin + 142, currentY + 5.2);
 
   currentY += metricsHeight + 3;
 
@@ -498,7 +500,7 @@ export async function downloadBinManifestPdf(
   // Rows
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(6.5);
-  const rowHeight = 6;
+  const rowHeight = 6.2;
 
   if (sortedRecords.length === 0) {
     doc.setFillColor(255, 255, 255);
@@ -510,8 +512,9 @@ export async function downloadBinManifestPdf(
     currentY += 10;
   } else {
     sortedRecords.forEach((r, i) => {
-      if (currentY > 136) {
-        doc.addPage('a5', 'landscape');
+      // In case of more items, add page
+      if (currentY > 275) {
+        doc.addPage('a4', 'portrait');
         currentY = margin + 4;
       }
 
@@ -551,9 +554,10 @@ export async function downloadBinManifestPdf(
     });
   }
 
-  // Note: Signature lines (Petugas & SPV) removed completely per user instructions
+  // Note: Entire manifest occupies approx. Y = 10mm to 118mm (the top half of A4 portrait).
+  // The bottom half remains blank so it prints only on 1/2 of the A4 paper.
 
-  const outputName = filename || `Kartu_Muatan_Bin_${binCode.replace('.', '_')}_1-2_A4.pdf`;
+  const outputName = filename || `Kartu_Muatan_Bin_${binCode.replace('.', '_')}.pdf`;
   doc.save(outputName);
 }
 

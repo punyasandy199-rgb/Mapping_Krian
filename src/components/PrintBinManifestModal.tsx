@@ -93,12 +93,9 @@ export const PrintBinManifestModal: React.FC<PrintBinManifestModalProps> = ({
                 <h3 className="text-base font-bold text-slate-900 dark:text-white">
                   Cetak Lembar Muatan Bin: {binCode}
                 </h3>
-                <span className="text-[10px] font-bold font-mono px-2 py-0.5 rounded bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800">
-                  Ukuran 1/2 A4
-                </span>
               </div>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                Format resmi rak gudang: 1/2 A4 (A5 Landscape 210 × 148.5 mm)
+                Format resmi rak gudang (tercetak di 1/2 lembar A4 portrait bagian atas)
               </p>
             </div>
           </div>
@@ -113,7 +110,7 @@ export const PrintBinManifestModal: React.FC<PrintBinManifestModalProps> = ({
         </div>
 
         {/* Modal Content - Document Preview */}
-        <div className="p-4 sm:p-6 overflow-y-auto space-y-4 print:p-2 print:overflow-visible">
+        <div className="p-4 sm:p-6 overflow-y-auto space-y-4 print:p-0 print:overflow-visible">
           {successMessage && (
             <div className="p-3 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-300 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200 rounded-xl text-xs font-semibold flex items-center gap-2">
               <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
@@ -121,39 +118,36 @@ export const PrintBinManifestModal: React.FC<PrintBinManifestModalProps> = ({
             </div>
           )}
 
-          {/* Sheet Document - Designed exactly to user instructions */}
-          <div className="bg-white text-slate-900 border-2 border-slate-900 rounded-xl p-6 shadow-md">
-            {/* Top Row: Gudang 5 at top right */}
-            <div className="flex items-start justify-between border-b-2 border-slate-900 pb-5 mb-4 gap-4">
-              {/* Left Column: LOKASI BIN & DIRECT NAMA BARANG in Extra Large Bold font */}
+          {/* Sheet Document - Designed exactly to user screenshot (Portrait 1/2 A4) */}
+          <div className="bg-white text-slate-900 border-2 border-slate-900 rounded-xl p-5 sm:p-6 shadow-md print:border-none print:shadow-none print:p-0 print:rounded-none">
+            {/* Top Row: Dark Header Banner matching exact screenshot layout */}
+            <div className="bg-slate-900 text-white rounded-lg p-4 sm:p-5 mb-3 flex items-start justify-between gap-4">
+              {/* Left Column: LOKASI BIN in Yellow & DIRECT NAMA BARANG in White */}
               <div className="flex-1 pr-2">
-                {/* LOKASI BIN: Extra Large Bold */}
-                <div className="text-4xl sm:text-5xl lg:text-6xl font-black font-mono tracking-tight text-slate-950 leading-none">
+                <div className="text-3xl sm:text-4xl lg:text-5xl font-black font-mono tracking-tight text-amber-200 leading-none">
                   LOKASI BIN: {binCode.toUpperCase()}
                 </div>
 
-                {/* NAMA BARANG: Langsung nama barang tanpa kata 'Barang:', dibuat sangat besar dan tebal */}
-                <div className="text-2xl sm:text-3xl lg:text-4xl font-black tracking-normal text-slate-900 mt-3 uppercase leading-tight">
+                {/* Direct Nama Barang: large white text, no "Barang:" prefix */}
+                <div className="text-xl sm:text-2xl font-black tracking-normal text-white mt-2.5 uppercase leading-tight">
                   {dominantItemName}
                 </div>
               </div>
 
-              {/* Right Column: "Gudang 5" text & Larger QR Code */}
-              <div className="shrink-0 flex flex-col items-end gap-2.5">
-                {/* User instruction: "lembar kendali muatan Bin gudang 5" dibuat dibagian kanan atas "Gudang 5" */}
-                <div className="text-base font-black uppercase tracking-wider bg-slate-900 text-white px-3.5 py-1.5 rounded shadow-xs">
+              {/* Right Column: "Gudang 5" badge & Larger QR Code */}
+              <div className="shrink-0 flex flex-col items-end gap-2">
+                <div className="text-xs sm:text-sm font-black uppercase tracking-wider bg-amber-200 text-slate-950 px-3 py-1 rounded shadow-xs">
                   GUDANG 5
                 </div>
 
-                {/* User instruction: "QR Code bisa dibuat lebih besar lagi" */}
-                <div className="p-2.5 bg-white border-2 border-slate-900 rounded-xl shadow-xs flex flex-col items-center">
+                <div className="p-2 bg-white rounded-lg shadow-xs flex flex-col items-center">
                   <QrCodeRenderer
                     value={scanUrl}
-                    size={120}
+                    size={96}
                     showLabel={false}
                     className="p-0 border-0 shadow-none"
                   />
-                  <span className="text-[10px] font-bold font-mono text-slate-800 mt-1 uppercase tracking-wider">
+                  <span className="text-[9px] font-bold font-mono text-slate-900 mt-1 uppercase tracking-wider">
                     SCAN BIN {binCode}
                   </span>
                 </div>
@@ -161,28 +155,23 @@ export const PrintBinManifestModal: React.FC<PrintBinManifestModalProps> = ({
             </div>
 
             {/* Metrics Bar */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 bg-slate-100 border border-slate-300 p-2.5 rounded-lg mb-4 text-xs font-mono">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 bg-slate-100 border border-slate-300 p-2.5 rounded-lg mb-3 text-xs font-mono">
               <div>
                 <span className="text-[10px] text-slate-500 block uppercase font-sans">Total Pallet</span>
-                <strong className="text-base text-slate-950">{uniquePallets} Pallet</strong>
+                <strong className="text-sm sm:text-base text-slate-950">{uniquePallets} Pallet</strong>
               </div>
               <div>
-                <span className="text-[10px] text-slate-500 block uppercase font-sans">Total Qty</span>
-                <strong className="text-base text-slate-950">{totalQty.toLocaleString('id-ID')} Box</strong>
+                <span className="text-[10px] text-slate-500 block uppercase font-sans">Total Muatan</span>
+                <strong className="text-sm sm:text-base text-slate-950">{totalQty.toLocaleString('id-ID')} Box</strong>
               </div>
               <div>
-                <span className="text-[10px] text-slate-500 block uppercase font-sans">Total Item / Baris</span>
-                <strong className="text-base text-slate-950">{records.length} Item</strong>
+                <span className="text-[10px] text-slate-500 block uppercase font-sans">Jumlah Item</span>
+                <strong className="text-sm sm:text-base text-slate-950">{records.length} Baris</strong>
               </div>
               <div>
                 <span className="text-[10px] text-slate-500 block uppercase font-sans">Waktu Cetak</span>
                 <span className="text-xs font-bold text-slate-800">
-                  {new Date().toLocaleDateString('id-ID', {
-                    day: '2-digit',
-                    month: 'short',
-                    hour: '2-digit',
-                    minute: '2-digit'
-                  })}
+                  {new Date().toLocaleString('id-ID')}
                 </span>
               </div>
             </div>

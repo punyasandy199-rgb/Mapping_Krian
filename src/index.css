@@ -15,11 +15,11 @@
   }
 }
 
-/* Print styling optimized for 1/2 A4 (A5 landscape), thermal, and standard paper */
+/* Print styling optimized for Portrait A4 (manifest prints on top 1/2 of A4 sheet) */
 @media print {
   @page {
-    size: 210mm 148.5mm; /* Format resmi 1/2 A4 (A5 Landscape) */
-    margin: 6mm;
+    size: A4 portrait;
+    margin: 8mm;
   }
 
   html, body {
