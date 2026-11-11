@@ -15,11 +15,11 @@
   }
 }
 
-/* Print styling optimized for thermal and standard paper labels */
+/* Print styling optimized for 1/2 A4 (A5 landscape), thermal, and standard paper */
 @media print {
   @page {
-    size: auto;
-    margin: 5mm;
+    size: 210mm 148.5mm; /* Format resmi 1/2 A4 (A5 Landscape) */
+    margin: 6mm;
   }
 
   html, body {

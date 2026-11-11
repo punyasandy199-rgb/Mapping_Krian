@@ -2,6 +2,7 @@ import { jsPDF } from 'jspdf';
 import QRCode from 'qrcode';
 import { PalletRecord } from '../types/warehouse';
 import { encodeCode128B } from './code128';
+import { sortBinRecordsByLoadingOrder } from './binSorting';
 
 /**
  * Generates and downloads a thermal label PDF (100mm x 150mm) for one or multiple pallet records.
@@ -380,20 +381,20 @@ export async function downloadBinManifestPdf(
   records: PalletRecord[],
   filename?: string
 ): Promise<void> {
+  // 1/2 A4 (A5 Landscape: 210mm wide x 148.5mm tall) per user instruction
   const doc = new jsPDF({
-    orientation: 'portrait',
+    orientation: 'landscape',
     unit: 'mm',
-    format: 'a4' // 210 x 297 mm
+    format: 'a5' // 210 x 148 mm (Ukuran 1/2 A4)
   });
 
   const pageWidth = 210;
-  const margin = 14;
-  const contentWidth = pageWidth - margin * 2; // 182mm
+  const pageHeight = 148;
+  const margin = 8;
+  const contentWidth = pageWidth - margin * 2; // 194mm
 
   // Sort: newest input at No. 1, earliest input at the bottom (slot 8)
-  const sortedRecords = [...records].sort(
-    (a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime()
-  );
+  const sortedRecords = sortBinRecordsByLoadingOrder(records);
 
   // Extract unique item names
   const dominantItemName =
@@ -402,20 +403,20 @@ export async function downloadBinManifestPdf(
   const uniquePallets = new Set(records.map((r) => r.nomorPallet || r.id)).size;
   const totalQty = records.reduce((sum, r) => sum + (Number(r.qtyPallet) || 0), 0);
 
-  // Header Box
-  const headerHeight = 48;
+  // Header Box (Compact for 1/2 A4)
+  const headerHeight = 35;
   doc.setFillColor(15, 23, 42); // slate-900
   doc.rect(margin, margin, contentWidth, headerHeight, 'F');
 
-  // Top right: GUDANG 5 badge per user instruction
+  // Top right: GUDANG 5 badge & 1/2 A4 indicator
   doc.setFillColor(254, 240, 138); // amber/yellow badge
-  doc.roundedRect(pageWidth - margin - 38, margin + 4, 34, 7.5, 1, 1, 'F');
+  doc.roundedRect(pageWidth - margin - 32, margin + 3, 29, 6.5, 1, 1, 'F');
   doc.setTextColor(15, 23, 42);
-  doc.setFontSize(9.5);
+  doc.setFontSize(8.5);
   doc.setFont('helvetica', 'bold');
-  doc.text('GUDANG 5', pageWidth - margin - 21, margin + 9.2, { align: 'center' });
+  doc.text('GUDANG 5', pageWidth - margin - 17.5, margin + 7.5, { align: 'center' });
 
-  // Large QR Code in header (40mm x 40mm)
+  // Large QR Code in header (24mm x 24mm)
   const binScanUrl =
     typeof window !== 'undefined'
       ? `${window.location.origin}${window.location.pathname}?bin=${encodeURIComponent(binCode)}`
@@ -432,124 +433,127 @@ export async function downloadBinManifestPdf(
     });
     // White background card for QR
     doc.setFillColor(255, 255, 255);
-    doc.roundedRect(pageWidth - margin - 40, margin + 13.5, 38, 31, 1, 1, 'F');
-    doc.addImage(qrDataUrl, 'PNG', pageWidth - margin - 37.5, margin + 14.5, 26, 26);
-    doc.setFontSize(6.5);
+    doc.roundedRect(pageWidth - margin - 34, margin + 10.5, 31, 23, 1, 1, 'F');
+    doc.addImage(qrDataUrl, 'PNG', pageWidth - margin - 32, margin + 11.2, 19, 19);
+    doc.setFontSize(5.5);
     doc.setFont('helvetica', 'bold');
     doc.setTextColor(15, 23, 42);
-    doc.text(`SCAN BIN ${binCode}`, pageWidth - margin - 21, margin + 43, { align: 'center' });
+    doc.text(`SCAN BIN ${binCode}`, pageWidth - margin - 18.5, margin + 32.5, { align: 'center' });
   } catch (err) {
     console.error('Failed to generate QR in PDF', err);
   }
 
   // Left Header Text: Extra Big Bold LOKASI BIN and direct NAMA BARANG (tanpa "BARANG:")
   doc.setTextColor(254, 240, 138); // Yellow-200
-  doc.setFontSize(26);
+  doc.setFontSize(22);
   doc.setFont('helvetica', 'bold');
-  doc.text(`LOKASI BIN: ${binCode.toUpperCase()}`, margin + 6, margin + 17);
+  doc.text(`LOKASI BIN: ${binCode.toUpperCase()}`, margin + 5, margin + 14);
 
   doc.setTextColor(255, 255, 255);
-  doc.setFontSize(15);
+  doc.setFontSize(12.5);
   doc.setFont('helvetica', 'bold');
-  const splitItemName = doc.splitTextToSize(dominantItemName.toUpperCase(), contentWidth - 46);
-  doc.text(splitItemName, margin + 6, margin + 29);
+  const splitItemName = doc.splitTextToSize(dominantItemName.toUpperCase(), contentWidth - 40);
+  doc.text(splitItemName, margin + 5, margin + 23);
 
   // Summary Metrics Bar
-  let currentY = margin + headerHeight + 4;
+  let currentY = margin + headerHeight + 3;
+  const metricsHeight = 7.5;
   doc.setFillColor(241, 245, 249);
-  doc.rect(margin, currentY, contentWidth, 12, 'F');
+  doc.rect(margin, currentY, contentWidth, metricsHeight, 'F');
   doc.setDrawColor(203, 213, 225);
   doc.setLineWidth(0.3);
-  doc.rect(margin, currentY, contentWidth, 12, 'S');
+  doc.rect(margin, currentY, contentWidth, metricsHeight, 'S');
 
   doc.setTextColor(30, 41, 59);
-  doc.setFontSize(8.5);
-  doc.setFont('helvetica', 'bold');
-  doc.text(`Total Pallet: ${uniquePallets} Pallet`, margin + 4, currentY + 7.5);
-  doc.text(`Total Muatan: ${totalQty.toLocaleString('id-ID')} Box`, margin + 48, currentY + 7.5);
-  doc.text(`Jumlah Item: ${records.length} Baris`, margin + 98, currentY + 7.5);
-  doc.setFont('helvetica', 'normal');
-  doc.setTextColor(100, 116, 139);
-  doc.text(`Waktu Cetak: ${new Date().toLocaleString('id-ID')}`, margin + 138, currentY + 7.5);
-
-  currentY += 16;
-
-  // Table Headers (Barcode column removed per user instruction!)
-  doc.setFillColor(15, 23, 42); // slate-900
-  doc.rect(margin, currentY, contentWidth, 8, 'F');
-
-  doc.setTextColor(255, 255, 255);
   doc.setFontSize(7.5);
   doc.setFont('helvetica', 'bold');
+  doc.text(`Total Pallet: ${uniquePallets} Pallet`, margin + 4, currentY + 5.2);
+  doc.text(`Total Muatan: ${totalQty.toLocaleString('id-ID')} Box`, margin + 48, currentY + 5.2);
+  doc.text(`Jumlah Item: ${records.length} Baris`, margin + 100, currentY + 5.2);
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(100, 116, 139);
+  doc.text(`Waktu Cetak: ${new Date().toLocaleString('id-ID')} · Format: 1/2 A4`, margin + 140, currentY + 5.2);
 
-  doc.text('No', margin + 3, currentY + 5.5);
-  doc.text('No Pallet', margin + 12, currentY + 5.5);
-  doc.text('Kode Item', margin + 35, currentY + 5.5);
-  doc.text('Nama Barang', margin + 70, currentY + 5.5);
-  doc.text('Qty', margin + 124, currentY + 5.5);
-  doc.text('No. Batch', margin + 140, currentY + 5.5);
-  doc.text('No. Box (Awal - Akhir)', margin + 158, currentY + 5.5);
+  currentY += metricsHeight + 3;
 
-  currentY += 8;
+  // Table Headers (Barcode column removed per user instruction!)
+  const thHeight = 6.5;
+  doc.setFillColor(15, 23, 42); // slate-900
+  doc.rect(margin, currentY, contentWidth, thHeight, 'F');
+
+  doc.setTextColor(255, 255, 255);
+  doc.setFontSize(7);
+  doc.setFont('helvetica', 'bold');
+
+  doc.text('No', margin + 3, currentY + 4.5);
+  doc.text('No Pallet', margin + 12, currentY + 4.5);
+  doc.text('Kode Item', margin + 35, currentY + 4.5);
+  doc.text('Nama Barang', margin + 70, currentY + 4.5);
+  doc.text('Qty', margin + 130, currentY + 4.5);
+  doc.text('No. Batch', margin + 148, currentY + 4.5);
+  doc.text('No. Box (Awal - Akhir)', margin + 168, currentY + 4.5);
+
+  currentY += thHeight;
 
   // Rows
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(7);
+  doc.setFontSize(6.5);
+  const rowHeight = 6;
 
   if (sortedRecords.length === 0) {
     doc.setFillColor(255, 255, 255);
-    doc.rect(margin, currentY, contentWidth, 14, 'F');
+    doc.rect(margin, currentY, contentWidth, 10, 'F');
     doc.setDrawColor(226, 232, 240);
-    doc.rect(margin, currentY, contentWidth, 14, 'S');
+    doc.rect(margin, currentY, contentWidth, 10, 'S');
     doc.setTextColor(100, 116, 139);
-    doc.text(`Belum ada muatan pallet tersimpan di Bin ${binCode}`, margin + 55, currentY + 8.5);
-    currentY += 14;
+    doc.text(`Belum ada muatan pallet tersimpan di Bin ${binCode}`, margin + 60, currentY + 6.5);
+    currentY += 10;
   } else {
     sortedRecords.forEach((r, i) => {
-      if (currentY > 275) {
-        doc.addPage('a4', 'portrait');
-        currentY = margin + 10;
+      if (currentY > 136) {
+        doc.addPage('a5', 'landscape');
+        currentY = margin + 4;
       }
 
       const rowBg = i % 2 === 0 ? 255 : 248;
       doc.setFillColor(rowBg, rowBg, rowBg);
-      doc.rect(margin, currentY, contentWidth, 7, 'F');
+      doc.rect(margin, currentY, contentWidth, rowHeight, 'F');
       doc.setDrawColor(226, 232, 240);
-      doc.rect(margin, currentY, contentWidth, 7, 'S');
+      doc.rect(margin, currentY, contentWidth, rowHeight, 'S');
 
       doc.setTextColor(71, 85, 105);
-      doc.text(String(i + 1), margin + 3, currentY + 4.8);
+      doc.text(String(i + 1), margin + 3, currentY + 4.2);
 
       doc.setFont('helvetica', 'bold');
       doc.setTextColor(15, 23, 42);
-      doc.text(r.nomorPallet || '-', margin + 12, currentY + 4.8);
+      doc.text(r.nomorPallet || '-', margin + 12, currentY + 4.2);
 
       doc.setTextColor(29, 78, 216);
-      doc.text(r.kodeItem || '-', margin + 35, currentY + 4.8);
+      doc.text(r.kodeItem || '-', margin + 35, currentY + 4.2);
 
       doc.setFont('helvetica', 'normal');
       doc.setTextColor(15, 23, 42);
-      const name = r.namaBarang.length > 34 ? r.namaBarang.substring(0, 32) + '...' : r.namaBarang;
-      doc.text(name, margin + 70, currentY + 4.8);
+      const name = r.namaBarang.length > 36 ? r.namaBarang.substring(0, 34) + '...' : r.namaBarang;
+      doc.text(name, margin + 70, currentY + 4.2);
 
       doc.setFont('helvetica', 'bold');
-      doc.text(`${r.qtyPallet} ${r.unit}`, margin + 124, currentY + 4.8);
+      doc.text(`${r.qtyPallet} ${r.unit}`, margin + 130, currentY + 4.2);
 
       doc.setTextColor(29, 78, 216);
-      doc.text(r.noBatch || '-', margin + 140, currentY + 4.8);
+      doc.text(r.noBatch || '-', margin + 148, currentY + 4.2);
 
       doc.setFont('helvetica', 'normal');
       doc.setTextColor(51, 65, 85);
       const boxRange = `${r.boxAwal || r.batchAwal || '-'} → ${r.boxAkhir || r.batchAkhir || '-'}`;
-      doc.text(boxRange, margin + 158, currentY + 4.8);
+      doc.text(boxRange, margin + 168, currentY + 4.2);
 
-      currentY += 7;
+      currentY += rowHeight;
     });
   }
 
   // Note: Signature lines (Petugas & SPV) removed completely per user instructions
 
-  const outputName = filename || `Kartu_Muatan_Bin_${binCode.replace('.', '_')}.pdf`;
+  const outputName = filename || `Kartu_Muatan_Bin_${binCode.replace('.', '_')}_1-2_A4.pdf`;
   doc.save(outputName);
 }
 

@@ -4,6 +4,7 @@ import { QrCodeRenderer } from './QrCodeRenderer';
 import { BarcodeRenderer } from './BarcodeRenderer';
 import { exportPalletsToCsv } from '../utils/exporter';
 import { downloadBinManifestPdf } from '../utils/pdfGenerator';
+import { sortBinRecordsByLoadingOrder } from '../utils/binSorting';
 import { PrintBinManifestModal } from './PrintBinManifestModal';
 import {
   MapPin,
@@ -38,9 +39,10 @@ export const BinDetailModal: React.FC<BinDetailModalProps> = ({
 
   if (!isOpen || !binCode) return null;
 
-  // Filter all items stored in this Bin
-  const itemsInBin = records.filter(
-    (r) => r.lokasiBin.toUpperCase() === binCode.toUpperCase()
+  // Filter and sort all items stored in this Bin:
+  // Item entered first is at the very end; newly added pallets fill previous numbers (No. 1).
+  const itemsInBin = sortBinRecordsByLoadingOrder(
+    records.filter((r) => r.lokasiBin.toUpperCase() === binCode.toUpperCase())
   );
 
   const totalQty = itemsInBin.reduce((sum, item) => sum + (Number(item.qtyPallet) || 0), 0);
@@ -159,6 +161,7 @@ export const BinDetailModal: React.FC<BinDetailModalProps> = ({
             <table className="w-full text-left text-xs border-collapse">
               <thead className="bg-slate-50 dark:bg-slate-800/80 sticky top-0 border-b border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300 font-semibold">
                 <tr>
+                  <th className="py-2.5 px-3 w-10 text-center">No</th>
                   <th className="py-2.5 px-3">No Pallet</th>
                   <th className="py-2.5 px-3">Kode Item</th>
                   <th className="py-2.5 px-3">Nama Barang</th>
@@ -170,11 +173,14 @@ export const BinDetailModal: React.FC<BinDetailModalProps> = ({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                {itemsInBin.map((item) => (
+                {itemsInBin.map((item, idx) => (
                   <tr
                     key={item.id}
                     className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors"
                   >
+                    <td className="py-2.5 px-3 text-center font-bold text-slate-500 font-mono">
+                      {idx + 1}
+                    </td>
                     <td className="py-2.5 px-3 font-mono font-bold text-slate-900 dark:text-white">
                       <span className="bg-amber-100 dark:bg-amber-950/60 text-amber-900 dark:text-amber-200 px-2 py-0.5 rounded border border-amber-300 dark:border-amber-900">
                         {item.nomorPallet || '-'}

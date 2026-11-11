@@ -4,7 +4,8 @@ import {
   MasterItem,
   COMMON_UNITS,
   GUDANG5_SLOTS_A,
-  GUDANG5_SLOTS_B
+  GUDANG5_SLOTS_B,
+  GUDANG5_SLOTS_B_PRIMARY
 } from '../types/warehouse';
 import { calculateBatchBoxCount } from '../utils/batchCalculator';
 import { QrCodeRenderer } from './QrCodeRenderer';
@@ -19,7 +20,8 @@ import {
   Database,
   QrCode,
   Box,
-  AlertCircle
+  AlertCircle,
+  ChevronDown
 } from 'lucide-react';
 
 interface PalletInputFormProps {
@@ -254,24 +256,24 @@ export const PalletInputForm: React.FC<PalletInputFormProps> = ({
               </span>
             </div>
             <span className="text-[11px] text-slate-500 font-medium">
-              Sisi Kiri: 8 Slot (5A.1–5A.8) · Sisi Kanan: 4 Slot (5B.1–5B.4)
+              Sisi Kiri: 50 Slot (5A.1–5A.50) · Sisi Kanan: 50 Slot (6 Slot Utama: 5B.1–5B.6)
             </span>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-12 gap-5 items-center">
-            {/* Input Lokasi Bin & Quick Buttons (Left 8 slots, Right 4 slots) */}
+            {/* Input Lokasi Bin & Quick Select (A & B hingga 50 slot, B 6 slot utama) */}
             <div className="md:col-span-8 space-y-3">
               <div>
                 <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
                   Lokasi Bin Penyimpanan <span className="text-red-500">*</span>
                 </label>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <input
                     type="text"
                     required
                     value={lokasiBin}
                     onChange={(e) => setLokasiBin(e.target.value.toUpperCase())}
-                    placeholder="Contoh: 5A.1, 5A.2, 5B.1"
+                    placeholder="Contoh: 5A.1, 5A.25, 5B.6"
                     className={`max-w-xs w-full text-base font-mono font-extrabold text-blue-700 dark:text-blue-300 bg-white dark:bg-slate-900 border rounded-lg px-3.5 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 ${
                       errors['lokasiBin']
                         ? 'border-red-500'
@@ -279,19 +281,20 @@ export const PalletInputForm: React.FC<PalletInputFormProps> = ({
                     }`}
                   />
                   <span className="text-xs text-slate-500 font-medium">
-                    (Berlaku untuk seluruh muatan barang di bawah)
+                    (Berlaku untuk seluruh muatan di rak bin ini)
                   </span>
                 </div>
               </div>
 
-              {/* Quick Select Buttons grouped by Left (5A) and Right (5B) */}
+              {/* Quick Select Buttons */}
               <div className="space-y-2 pt-1">
-                {/* Sisi Kiri (5A) - 8 Slot */}
+                {/* Sisi Kiri (5A) - 50 Slot */}
                 <div className="flex flex-wrap items-center gap-1.5 text-xs">
                   <span className="text-[10px] font-bold text-blue-700 dark:text-blue-300 bg-blue-100 dark:bg-blue-950 px-2 py-0.5 rounded">
-                    Kiri (5A - 8 Slot):
+                    Kiri (5A.1–5A.50):
                   </span>
-                  {GUDANG5_SLOTS_A.map((code) => (
+                  {/* Quick chips for first 8 slots */}
+                  {GUDANG5_SLOTS_A.slice(0, 8).map((code) => (
                     <button
                       key={code}
                       type="button"
@@ -305,14 +308,29 @@ export const PalletInputForm: React.FC<PalletInputFormProps> = ({
                       {code}
                     </button>
                   ))}
+                  {/* Dropdown for all 50 slots in 5A */}
+                  <select
+                    value={lokasiBin.startsWith('5A.') ? lokasiBin : ''}
+                    onChange={(e) => {
+                      if (e.target.value) setLokasiBin(e.target.value);
+                    }}
+                    className="text-xs font-mono bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded px-2 py-0.5 text-slate-700 dark:text-slate-300 focus:outline-none"
+                  >
+                    <option value="">Pilih 5A (1-50)...</option>
+                    {GUDANG5_SLOTS_A.map((code) => (
+                      <option key={code} value={code}>
+                        Bin {code}
+                      </option>
+                    ))}
+                  </select>
                 </div>
 
-                {/* Sisi Kanan (5B) - 4 Slot */}
+                {/* Sisi Kanan (5B) - 6 Slot Utama & hingga 50 */}
                 <div className="flex flex-wrap items-center gap-1.5 text-xs">
                   <span className="text-[10px] font-bold text-slate-800 dark:text-slate-200 bg-slate-200 dark:bg-slate-800 px-2 py-0.5 rounded">
-                    Kanan (5B - 4 Slot):
+                    Kanan (5B - 6 Slot Utama):
                   </span>
-                  {GUDANG5_SLOTS_B.map((code) => (
+                  {GUDANG5_SLOTS_B_PRIMARY.map((code) => (
                     <button
                       key={code}
                       type="button"
@@ -326,6 +344,21 @@ export const PalletInputForm: React.FC<PalletInputFormProps> = ({
                       {code}
                     </button>
                   ))}
+                  {/* Dropdown for all 50 slots in 5B */}
+                  <select
+                    value={lokasiBin.startsWith('5B.') ? lokasiBin : ''}
+                    onChange={(e) => {
+                      if (e.target.value) setLokasiBin(e.target.value);
+                    }}
+                    className="text-xs font-mono bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded px-2 py-0.5 text-slate-700 dark:text-slate-300 focus:outline-none"
+                  >
+                    <option value="">Pilih 5B (1-50)...</option>
+                    {GUDANG5_SLOTS_B.map((code) => (
+                      <option key={code} value={code}>
+                        Bin {code}
+                      </option>
+                    ))}
+                  </select>
                 </div>
               </div>
             </div>
@@ -458,6 +491,7 @@ export const PalletInputForm: React.FC<PalletInputFormProps> = ({
                           onChange={(e) => {
                             const val = e.target.value;
                             handleRowChange(row.id, 'namaBarang', val);
+                            setActiveDropdownRowId(row.id);
                             const matched = masterItems.find(
                               (m) => m.namaBarang.toLowerCase() === val.toLowerCase()
                             );
@@ -469,10 +503,32 @@ export const PalletInputForm: React.FC<PalletInputFormProps> = ({
                               }
                             }
                           }}
-                          onFocus={() => setActiveDropdownRowId(row.id)}
+                          onClick={() => {
+                            // User requirement: tap to show, tap again to hide
+                            setActiveDropdownRowId((prev) => (prev === row.id ? null : row.id));
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Escape') {
+                              setActiveDropdownRowId(null);
+                            }
+                          }}
                           placeholder="Pilih atau ketik nama barang..."
-                          className="w-full text-sm bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          className="w-full text-sm bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg pl-3 pr-8 py-2 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
                         />
+
+                        {/* Chevron button to toggle dropdown on click/tap */}
+                        <button
+                          type="button"
+                          onClick={() => setActiveDropdownRowId((prev) => (prev === row.id ? null : row.id))}
+                          className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-colors"
+                          title="Buka / tutup daftar master barang"
+                        >
+                          <ChevronDown
+                            className={`w-4 h-4 transition-transform duration-200 ${
+                              activeDropdownRowId === row.id ? 'rotate-180 text-blue-600' : ''
+                            }`}
+                          />
+                        </button>
 
                         {/* Autocomplete Dropdown from Master Items */}
                         {activeDropdownRowId === row.id && (

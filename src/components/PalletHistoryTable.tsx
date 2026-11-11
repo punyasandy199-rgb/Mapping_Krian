@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { PalletRecord, GUDANG5_QUICK_BINS } from '../types/warehouse';
 import { exportPalletsToCsv } from '../utils/exporter';
+import { sortBinRecordsByLoadingOrder } from '../utils/binSorting';
 import {
   downloadPalletLabelPdf,
   downloadPalletHistoryReportPdf,
@@ -131,7 +132,10 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
     return Object.keys(map)
       .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
       .map((binCode) => {
-        const items = map[binCode];
+        const rawItems = map[binCode];
+        // Sort according to warehouse loading rule:
+        // Item entered first is at the very end; newly added pallets fill previous numbers (No. 1).
+        const items = sortBinRecordsByLoadingOrder(rawItems);
         const uniquePallets = new Set(items.map((r) => r.nomorPallet || r.id)).size;
         const totalQty = items.reduce((sum, r) => sum + (Number(r.qtyPallet) || 0), 0);
         return {
@@ -508,10 +512,8 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
                 new Set(binGroup.items.map((r) => r.namaBarang).filter(Boolean))
               );
 
-              // Sort newest first: row 1 is the latest added pallet
-              const sortedItems = [...binGroup.items].sort(
-                (a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime()
-              );
+              // Items are already sorted by loading order: row 1 is latest added pallet, bottom row is first entered
+              const sortedItems = binGroup.items;
 
               return (
                 <div
@@ -640,6 +642,7 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
                                 )}
                               </button>
                             </th>
+                            <th className="py-2.5 px-3 w-10 text-center">No</th>
                             <th className="py-2.5 px-3">No Pallet</th>
                             <th className="py-2.5 px-3">Kode Item</th>
                             <th className="py-2.5 px-3">Nama Barang</th>
@@ -674,6 +677,9 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
                                       <Square className="w-4 h-4" />
                                     )}
                                   </button>
+                                </td>
+                                <td className="py-2.5 px-3 text-center font-bold text-slate-500 font-mono">
+                                  {rowIdx + 1}
                                 </td>
                                 <td className="py-2.5 px-3 font-bold text-slate-900 dark:text-slate-100">
                                   <span className="bg-amber-100 dark:bg-amber-950/60 text-amber-900 dark:text-amber-200 px-2 py-0.5 rounded border border-amber-300 dark:border-amber-900">

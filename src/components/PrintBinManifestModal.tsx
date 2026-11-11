@@ -3,6 +3,7 @@ import { PalletRecord } from '../types/warehouse';
 import { QrCodeRenderer } from './QrCodeRenderer';
 import { downloadBinManifestPdf } from '../utils/pdfGenerator';
 import { exportPalletsToCsv } from '../utils/exporter';
+import { sortBinRecordsByLoadingOrder } from '../utils/binSorting';
 import {
   Printer,
   FileDown,
@@ -34,16 +35,12 @@ export const PrintBinManifestModal: React.FC<PrintBinManifestModalProps> = ({
 
   if (!isOpen || !binCode) return null;
 
-  // Sorting requirement:
-  // "penginputan paling atas apabila lembar nya dicetak selalu di posisi pallet paling bawah (nomor 8),
-  // apabila ada penambahan inputan, maka penambahan di nomor kecilnya, semisal data ada 6 palet,
-  // dan dilain waktu ada penambahan 1 pallet, maka pada lembar cetak tertampilnya di nomor urut 1,
-  // dan 6 pallet sebelumnya mundur (menjadi nomor 2-7)."
-  // => Newest added pallet is No. 1, oldest/earliest added pallet is at the bottom (largest number).
+  // Sorting rule:
+  // "item pertama yang diinput di 1 Bin adalah urutan paling terakhir,
+  // sehingga apabila ada penambahan pallet akan mengisi posisi urutan sebelumnya"
+  // (Newest pallet is Row No. 1, first pallet ever entered in this bin is at the bottom).
   const sortedRecords = useMemo(() => {
-    return [...records].sort(
-      (a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime()
-    );
+    return sortBinRecordsByLoadingOrder(records);
   }, [records]);
 
   // Extract unique item names (Dominant item name in bold large font)
@@ -92,11 +89,16 @@ export const PrintBinManifestModal: React.FC<PrintBinManifestModalProps> = ({
               <Printer className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="text-base font-bold text-slate-900 dark:text-white">
-                Cetak Lembar Muatan Bin: {binCode}
-              </h3>
+              <div className="flex items-center gap-2">
+                <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                  Cetak Lembar Muatan Bin: {binCode}
+                </h3>
+                <span className="text-[10px] font-bold font-mono px-2 py-0.5 rounded bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800">
+                  Ukuran 1/2 A4
+                </span>
+              </div>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                Pratinjau lembar cetak rak fisik gudang (A4 / Thermal)
+                Format resmi rak gudang: 1/2 A4 (A5 Landscape 210 × 148.5 mm)
               </p>
             </div>
           </div>

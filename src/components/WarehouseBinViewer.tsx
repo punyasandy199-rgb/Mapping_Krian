@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { PalletRecord, GUDANG5_SLOTS_A, GUDANG5_SLOTS_B } from '../types/warehouse';
+import { sortBinRecordsByLoadingOrder } from '../utils/binSorting';
 import { MapPin, Box, ArrowDown, Info } from 'lucide-react';
 
 interface WarehouseBinViewerProps {
@@ -28,8 +29,27 @@ export const WarehouseBinViewer: React.FC<WarehouseBinViewerProps> = ({
   // Count occupied slots
   const occupiedA = GUDANG5_SLOTS_A.filter((slot) => (binMap.get(slot)?.length || 0) > 0).length;
   const occupiedB = GUDANG5_SLOTS_B.filter((slot) => (binMap.get(slot)?.length || 0) > 0).length;
+  const occupiedBPrimary = ['5B.1', '5B.2', '5B.3', '5B.4', '5B.5', '5B.6'].filter(
+    (slot) => (binMap.get(slot)?.length || 0) > 0
+  ).length;
 
-  const inspectedPallets = selectedBin ? binMap.get(selectedBin) : null;
+  const [rangeFilter, setRangeFilter] = useState<string>('all');
+  const [showAllBSlots, setShowAllBSlots] = useState<boolean>(false);
+
+  // Filter rows based on range
+  const displayedIndices = React.useMemo(() => {
+    const total = 50;
+    if (rangeFilter === '1-10') return Array.from({ length: 10 }, (_, i) => i);
+    if (rangeFilter === '11-20') return Array.from({ length: 10 }, (_, i) => i + 10);
+    if (rangeFilter === '21-30') return Array.from({ length: 10 }, (_, i) => i + 20);
+    if (rangeFilter === '31-40') return Array.from({ length: 10 }, (_, i) => i + 30);
+    if (rangeFilter === '41-50') return Array.from({ length: 10 }, (_, i) => i + 40);
+    return Array.from({ length: total }, (_, i) => i);
+  }, [rangeFilter]);
+
+  const inspectedPallets = selectedBin
+    ? sortBinRecordsByLoadingOrder(binMap.get(selectedBin) || [])
+    : null;
 
   return (
     <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm p-5 md:p-6 space-y-6">
@@ -42,24 +62,69 @@ export const WarehouseBinViewer: React.FC<WarehouseBinViewerProps> = ({
             </div>
             <div>
               <h3 className="text-base font-bold text-slate-900 dark:text-white">
-                Denah Tata Letak Bin Gudang 5
+                Denah Tata Letak Bin Gudang 5 (50 Slot)
               </h3>
               <p className="text-xs text-slate-500 mt-0.5">
-                Sisi Kiri: 8 Slot (5A.1–5A.8) · Tengah: Area Kosong / Lorong · Sisi Kanan: 4 Slot (5B.1–5B.4)
+                Sisi Kiri: 50 Slot (5A.1–5A.50) · Tengah: Lorong Forklift · Sisi Kanan: 6 Slot Utama (5B.1–5B.6) &amp; s/d 50
               </p>
             </div>
           </div>
         </div>
 
         {/* Status Indicators */}
-        <div className="flex items-center gap-3 text-xs font-mono">
+        <div className="flex flex-wrap items-center gap-2 text-xs font-mono">
           <span className="px-2.5 py-1 rounded bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
-            Kiri (5A): <strong className="text-blue-600">{occupiedA}/8</strong>
+            Kiri (5A): <strong className="text-blue-600">{occupiedA}/50</strong>
           </span>
           <span className="px-2.5 py-1 rounded bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
-            Kanan (5B): <strong className="text-blue-600">{occupiedB}/4</strong>
+            Kanan (5B Utama): <strong className="text-blue-600">{occupiedBPrimary}/6</strong>
+          </span>
+          <span className="px-2.5 py-1 rounded bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
+            Kanan (Total 5B): <strong className="text-purple-600">{occupiedB}/50</strong>
           </span>
         </div>
+      </div>
+
+      {/* Range Quick Filters Toolbar */}
+      <div className="flex flex-wrap items-center justify-between gap-2 bg-slate-100/70 dark:bg-slate-800/40 p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs">
+        <div className="flex flex-wrap items-center gap-1">
+          <span className="text-[11px] font-bold text-slate-500 mr-1">Tampilkan Slot:</span>
+          {[
+            { id: 'all', label: 'Semua (1-50)' },
+            { id: '1-10', label: '1 - 10' },
+            { id: '11-20', label: '11 - 20' },
+            { id: '21-30', label: '21 - 30' },
+            { id: '31-40', label: '31 - 40' },
+            { id: '41-50', label: '41 - 50' }
+          ].map((r) => (
+            <button
+              key={r.id}
+              type="button"
+              onClick={() => setRangeFilter(r.id)}
+              className={`px-2.5 py-1 rounded-lg font-semibold transition-colors ${
+                rangeFilter === r.id
+                  ? 'bg-blue-600 text-white shadow-xs'
+                  : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:bg-slate-50'
+              }`}
+            >
+              {r.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Toggle Sisi B: 6 Slot Utama vs Semua 50 Slot */}
+        <button
+          type="button"
+          onClick={() => setShowAllBSlots((prev) => !prev)}
+          className={`px-3 py-1 rounded-lg text-xs font-semibold border transition-colors ${
+            showAllBSlots
+              ? 'bg-purple-600 text-white border-purple-600'
+              : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border-slate-300 dark:border-slate-700 hover:bg-slate-50'
+          }`}
+          title="Tampilkan 6 slot utama (5B.1–5B.6) atau seluruh 50 slot pada sisi kanan B"
+        >
+          {showAllBSlots ? 'Mode Sisi B: Seluruh 50 Slot' : 'Mode Sisi B: 6 Slot Utama'}
+        </button>
       </div>
 
       {/* Visual Denah Layout */}
@@ -67,25 +132,35 @@ export const WarehouseBinViewer: React.FC<WarehouseBinViewerProps> = ({
         {/* Layout Column Headers */}
         <div className="grid grid-cols-12 gap-3 mb-3 text-center text-xs font-bold uppercase tracking-wider">
           <div className="col-span-5 sm:col-span-5 bg-blue-600 text-white py-2 px-3 rounded-lg shadow-xs flex items-center justify-center gap-1.5">
-            <span>SISI KIRI (5A) - 8 SLOT PALLET</span>
+            <span>SISI KIRI (5A) - 50 SLOT</span>
             <ArrowDown className="w-3.5 h-3.5 opacity-80" />
           </div>
 
           <div className="col-span-2 sm:col-span-2 bg-amber-500/20 text-amber-900 dark:text-amber-200 border border-dashed border-amber-400 dark:border-amber-700 py-2 px-1 rounded-lg text-[10px] sm:text-xs flex items-center justify-center">
-            <span>BAGIAN TENGAH (KOSONG)</span>
+            <span>LORONG FORKLIFT</span>
           </div>
 
           <div className="col-span-5 sm:col-span-5 bg-slate-800 text-white py-2 px-3 rounded-lg shadow-xs flex items-center justify-center gap-1.5">
-            <span>SISI KANAN (5B) - 4 SLOT PALLET</span>
+            <span>
+              {showAllBSlots
+                ? 'SISI KANAN (5B) - 50 SLOT'
+                : 'SISI KANAN (5B) - 6 SLOT UTAMA'}
+            </span>
             <ArrowDown className="w-3.5 h-3.5 opacity-80" />
           </div>
         </div>
 
-        {/* 8 Rows of Vertical Layout Grid */}
-        <div className="space-y-3">
-          {GUDANG5_SLOTS_A.map((slotA, index) => {
+        {/* Rows of Vertical Layout Grid */}
+        <div className="space-y-3 max-h-[68vh] overflow-y-auto pr-1">
+          {displayedIndices.map((index) => {
             const rowNumber = index + 1;
-            const slotB = GUDANG5_SLOTS_B[index] || null; // 5B.1 to 5B.4 exist for index 0..3
+            const slotA = GUDANG5_SLOTS_A[index] || `5A.${rowNumber}`;
+            // Sisi B: 6 slot utama (rowNumber <= 6), or if showAllBSlots or has items
+            const hasItemsInB = (binMap.get(`5B.${rowNumber}`)?.length || 0) > 0;
+            const slotB =
+              rowNumber <= 6 || showAllBSlots || hasItemsInB
+                ? GUDANG5_SLOTS_B[index] || `5B.${rowNumber}`
+                : null;
 
             const itemsA = binMap.get(slotA) || [];
             const isFilledA = itemsA.length > 0;
@@ -97,7 +172,7 @@ export const WarehouseBinViewer: React.FC<WarehouseBinViewerProps> = ({
 
             return (
               <div key={rowNumber} className="grid grid-cols-12 gap-3 items-stretch">
-                {/* 1. SISI KIRI (5A.1 s/d 5A.8) */}
+                {/* 1. SISI KIRI (5A.1 s/d 5A.50) */}
                 <div
                   onClick={() => {
                     setSelectedBin(slotA);
@@ -145,16 +220,14 @@ export const WarehouseBinViewer: React.FC<WarehouseBinViewerProps> = ({
                   )}
                 </div>
 
-                {/* 2. BAGIAN TENGAH (KOSONG - LORONG FORKLIFT) */}
+                {/* 2. BAGIAN TENGAH (LORONG FORKLIFT) */}
                 <div className="col-span-2 sm:col-span-2 flex flex-col items-center justify-center p-2 rounded-lg bg-amber-50/40 dark:bg-amber-950/20 border border-dashed border-amber-300 dark:border-amber-900/60 text-center select-none">
-                  <div className="w-1.5 h-1.5 rounded-full bg-amber-400 dark:bg-amber-600 mb-1" />
-                  <span className="text-[9px] font-mono text-amber-800 dark:text-amber-400 font-semibold tracking-tighter sm:tracking-normal">
-                    LORONG KOSONG
+                  <span className="text-[10px] font-mono text-amber-800 dark:text-amber-400 font-bold">
+                    #{rowNumber}
                   </span>
-                  <div className="w-1.5 h-1.5 rounded-full bg-amber-400 dark:bg-amber-600 mt-1" />
                 </div>
 
-                {/* 3. SISI KANAN (5B.1 s/d 5B.4 atau KOSONG jika baris 5-8) */}
+                {/* 3. SISI KANAN (5B: 6 slot utama & s/d 50 slot) */}
                 {slotB ? (
                   <div
                     onClick={() => {
@@ -170,9 +243,16 @@ export const WarehouseBinViewer: React.FC<WarehouseBinViewerProps> = ({
                     }`}
                   >
                     <div className="flex items-center justify-between text-xs font-mono">
-                      <span className="font-black text-sm text-slate-900 dark:text-white">
-                        {slotB}
-                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-black text-sm text-slate-900 dark:text-white">
+                          {slotB}
+                        </span>
+                        {rowNumber <= 6 && (
+                          <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-purple-100 dark:bg-purple-950 text-purple-700 dark:text-purple-300">
+                            Utama
+                          </span>
+                        )}
+                      </div>
                       {isFilledB ? (
                         <span className="text-[10px] font-bold text-emerald-800 dark:text-emerald-300 bg-emerald-100 dark:bg-emerald-900/60 px-2 py-0.5 rounded flex items-center gap-1">
                           <Box className="w-3 h-3" /> {itemsB.length} Item
@@ -203,10 +283,20 @@ export const WarehouseBinViewer: React.FC<WarehouseBinViewerProps> = ({
                     )}
                   </div>
                 ) : (
-                  // Baris 5 sampai 8 Sisi Kanan adalah Area Kosong (sesuai instruksi: sisi kanan hanya ada 4 pallet)
-                  <div className="col-span-5 sm:col-span-5 p-3 rounded-xl border border-dashed border-slate-300 dark:border-slate-800 bg-slate-100/60 dark:bg-slate-900/30 flex items-center justify-center text-slate-400 text-center select-none">
-                    <span className="text-[11px] font-mono italic">
-                      Area Kosong Bebas Rak (Sisi Kanan)
+                  // Baris > 6 saat mode 6 slot utama
+                  <div
+                    onClick={() => {
+                      const dynamicSlot = `5B.${rowNumber}`;
+                      setSelectedBin(dynamicSlot);
+                      if (onSelectBin) onSelectBin(dynamicSlot);
+                    }}
+                    className="col-span-5 sm:col-span-5 p-3 rounded-xl border border-dashed border-slate-300 dark:border-slate-800 bg-slate-100/50 dark:bg-slate-900/20 hover:bg-slate-100 dark:hover:bg-slate-900/40 cursor-pointer flex items-center justify-between text-slate-400 text-center transition-colors"
+                  >
+                    <span className="text-xs font-mono font-semibold text-slate-500">
+                      5B.{rowNumber}
+                    </span>
+                    <span className="text-[10px] font-mono italic">
+                      + Buka Slot 5B.{rowNumber}
                     </span>
                   </div>
                 )}

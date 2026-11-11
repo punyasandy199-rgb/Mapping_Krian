@@ -238,14 +238,20 @@ export default function App() {
       .substring(2, 6)
       .toUpperCase()}`;
 
+    const nowMs = Date.now();
     const newPalletRecords: PalletRecord[] = rows.map((row, idx) => {
       const boxAwalVal = (row.boxAwal || row.batchAwal || '').trim().toUpperCase();
       const boxAkhirVal = (row.boxAkhir || row.batchAkhir || '').trim().toUpperCase();
       const noBatchVal = (row.noBatch || '').trim().toUpperCase();
 
+      // Row idx 0 is the first item entered ("penginputan paling atas").
+      // Assign incremental timestamps so earlier rows in the form are chronologically
+      // earlier (older) and later rows or subsequent pallet additions are newer.
+      const rowTimestamp = new Date(nowMs + idx * 1000).toISOString();
+
       return {
-        id: `plt-${Date.now()}-${idx}-${Math.random().toString(36).substring(2, 5)}`,
-        nomorPallet: row.nomorPallet.trim().toUpperCase(), // Selalu sesuai input user (kondisikan tidak ada fallback dummy)
+        id: `plt-${nowMs}-${idx}-${Math.random().toString(36).substring(2, 5)}`,
+        nomorPallet: row.nomorPallet.trim().toUpperCase(), // Selalu sesuai input user
         barcodeNumber: generatePalletBarcode('PLT'),
         batchId,
         itemIndex: idx + 1,
@@ -260,7 +266,7 @@ export default function App() {
         batchAkhir: boxAkhirVal, // kompatibilitas
         lokasiBin: lokasiBin.trim().toUpperCase(),
         keterangan: row.keterangan?.trim() || '',
-        submittedAt: now.toISOString()
+        submittedAt: rowTimestamp
       };
     });
 

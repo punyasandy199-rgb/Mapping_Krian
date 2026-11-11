@@ -81,14 +81,22 @@ export const DEFAULT_MASTER_ITEMS: MasterItem[] = [
 ];
 
 // Layout Gudang 5:
-// Sisi Kiri (A): 8 slot pallet urut ke bawah (5A.1 s/d 5A.8)
-export const GUDANG5_SLOTS_A = [
-  '5A.1', '5A.2', '5A.3', '5A.4', '5A.5', '5A.6', '5A.7', '5A.8'
-];
+// Sisi Kiri (A): hingga 50 slot (5A.1 s/d 5A.50)
+export const GUDANG5_SLOTS_A: string[] = Array.from(
+  { length: 50 },
+  (_, i) => `5A.${i + 1}`
+);
 
-// Sisi Kanan (B): 4 slot pallet urut ke bawah (5B.1 s/d 5B.4)
-export const GUDANG5_SLOTS_B = [
-  '5B.1', '5B.2', '5B.3', '5B.4'
+// Sisi Kanan (B): hingga 50 slot (5B.1 s/d 5B.50) dengan 6 slot utama
+export const GUDANG5_SLOTS_B: string[] = Array.from(
+  { length: 50 },
+  (_, i) => `5B.${i + 1}`
+);
+
+// 6 slot standar utama di lokasi B (5B.1 s/d 5B.6)
+export const GUDANG5_SLOTS_B_PRIMARY: string[] = [
+  '5B.1', '5B.2', '5B.3', '5B.4', '5B.5', '5B.6'
 ];
 
 export const GUDANG5_QUICK_BINS = [...GUDANG5_SLOTS_A, ...GUDANG5_SLOTS_B];
+
