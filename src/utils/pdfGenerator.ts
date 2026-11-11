@@ -404,20 +404,24 @@ export async function downloadBinManifestPdf(
   const uniquePallets = new Set(records.map((r) => r.nomorPallet || r.id)).size;
   const totalQty = records.reduce((sum, r) => sum + (Number(r.qtyPallet) || 0), 0);
 
-  // Header Box (top of A4 sheet)
+  // Header Box (top of A4 sheet, clean white with border - NO BLACK BLOCKING)
   const headerHeight = 36;
-  doc.setFillColor(15, 23, 42); // slate-900 (#0f172a)
-  doc.rect(margin, margin, contentWidth, headerHeight, 'F');
+  doc.setFillColor(255, 255, 255);
+  doc.setDrawColor(15, 23, 42); // slate-900 outline
+  doc.setLineWidth(0.8);
+  doc.roundedRect(margin, margin, contentWidth, headerHeight, 1.5, 1.5, 'FD');
 
-  // Top right: GUDANG 5 badge
-  doc.setFillColor(254, 240, 138); // amber/yellow badge (#fef08a)
-  doc.roundedRect(pageWidth - margin - 35, margin + 4, 30, 7, 1, 1, 'F');
+  // Top right: GUDANG 5 badge (clean white with border)
+  doc.setFillColor(248, 250, 252);
+  doc.setDrawColor(15, 23, 42);
+  doc.setLineWidth(0.4);
+  doc.roundedRect(pageWidth - margin - 35, margin + 4, 30, 7, 1, 1, 'FD');
   doc.setTextColor(15, 23, 42);
   doc.setFontSize(9);
   doc.setFont('helvetica', 'bold');
   doc.text('GUDANG 5', pageWidth - margin - 20, margin + 8.8, { align: 'center' });
 
-  // Large QR Code in header (20mm x 20mm)
+  // Large QR Code in header (20mm x 20mm) with crisp border
   const binScanUrl =
     typeof window !== 'undefined'
       ? `${window.location.origin}${window.location.pathname}?bin=${encodeURIComponent(binCode)}`
@@ -434,7 +438,9 @@ export async function downloadBinManifestPdf(
     });
     // White background card for QR
     doc.setFillColor(255, 255, 255);
-    doc.roundedRect(pageWidth - margin - 37, margin + 12.5, 34, 21.5, 1, 1, 'F');
+    doc.setDrawColor(148, 163, 184);
+    doc.setLineWidth(0.3);
+    doc.roundedRect(pageWidth - margin - 37, margin + 12.5, 34, 21.5, 1, 1, 'FD');
     doc.addImage(qrDataUrl, 'PNG', pageWidth - margin - 35, margin + 13.2, 17.5, 17.5);
     doc.setFontSize(5.5);
     doc.setFont('helvetica', 'bold');
@@ -444,46 +450,47 @@ export async function downloadBinManifestPdf(
     console.error('Failed to generate QR in PDF', err);
   }
 
-  // Left Header Text: Extra Big Bold LOKASI BIN and direct NAMA BARANG (tanpa "BARANG:")
-  doc.setTextColor(254, 240, 138); // Yellow-200
+  // Left Header Text: Clean Bold Black LOKASI BIN and direct NAMA BARANG (no black background fill)
+  doc.setTextColor(15, 23, 42); // Black font
   doc.setFontSize(22);
   doc.setFont('helvetica', 'bold');
   doc.text(`LOKASI BIN: ${binCode.toUpperCase()}`, margin + 6, margin + 14);
 
-  doc.setTextColor(255, 255, 255);
+  doc.setTextColor(15, 23, 42); // Black font
   doc.setFontSize(13);
   doc.setFont('helvetica', 'bold');
   const splitItemName = doc.splitTextToSize(dominantItemName.toUpperCase(), contentWidth - 45);
   doc.text(splitItemName, margin + 6, margin + 24);
 
-  // Summary Metrics Bar
+  // Summary Metrics Bar (Clean light border, white background)
   let currentY = margin + headerHeight + 3;
   const metricsHeight = 7.5;
-  doc.setFillColor(241, 245, 249);
-  doc.rect(margin, currentY, contentWidth, metricsHeight, 'F');
-  doc.setDrawColor(203, 213, 225);
+  doc.setFillColor(255, 255, 255);
+  doc.setDrawColor(15, 23, 42);
   doc.setLineWidth(0.3);
-  doc.rect(margin, currentY, contentWidth, metricsHeight, 'S');
+  doc.rect(margin, currentY, contentWidth, metricsHeight, 'FD');
 
-  doc.setTextColor(30, 41, 59);
+  doc.setTextColor(15, 23, 42);
   doc.setFontSize(7.5);
   doc.setFont('helvetica', 'bold');
   doc.text(`Total Pallet: ${uniquePallets} Pallet`, margin + 4, currentY + 5.2);
   doc.text(`Total Muatan: ${totalQty.toLocaleString('id-ID')} Box`, margin + 48, currentY + 5.2);
   doc.text(`Jumlah Item: ${records.length} Baris`, margin + 102, currentY + 5.2);
   doc.setFont('helvetica', 'normal');
-  doc.setTextColor(100, 116, 139);
+  doc.setTextColor(71, 85, 105);
   // User instruction: "format 1/2 A4 tidak perlu" - only display Waktu Cetak
   doc.text(`Waktu Cetak: ${new Date().toLocaleString('id-ID')}`, margin + 142, currentY + 5.2);
 
   currentY += metricsHeight + 3;
 
-  // Table Headers (Barcode column removed per user instruction!)
+  // Table Headers (Clean white/light background with black text and crisp borders - NO BLACK BLOCKING)
   const thHeight = 6.5;
-  doc.setFillColor(15, 23, 42); // slate-900
-  doc.rect(margin, currentY, contentWidth, thHeight, 'F');
+  doc.setFillColor(248, 250, 252);
+  doc.setDrawColor(15, 23, 42);
+  doc.setLineWidth(0.5);
+  doc.rect(margin, currentY, contentWidth, thHeight, 'FD');
 
-  doc.setTextColor(255, 255, 255);
+  doc.setTextColor(15, 23, 42); // Solid black text
   doc.setFontSize(7);
   doc.setFont('helvetica', 'bold');
 

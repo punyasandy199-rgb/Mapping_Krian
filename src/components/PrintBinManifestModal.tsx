@@ -118,29 +118,29 @@ export const PrintBinManifestModal: React.FC<PrintBinManifestModalProps> = ({
             </div>
           )}
 
-          {/* Sheet Document - Designed exactly to user screenshot (Portrait 1/2 A4) */}
+          {/* Sheet Document - Designed for clean ink-friendly printing (Portrait 1/2 A4, NO BLACK BLOCKING) */}
           <div className="bg-white text-slate-900 border-2 border-slate-900 rounded-xl p-5 sm:p-6 shadow-md print:border-none print:shadow-none print:p-0 print:rounded-none">
-            {/* Top Row: Dark Header Banner matching exact screenshot layout */}
-            <div className="bg-slate-900 text-white rounded-lg p-4 sm:p-5 mb-3 flex items-start justify-between gap-4">
-              {/* Left Column: LOKASI BIN in Yellow & DIRECT NAMA BARANG in White */}
+            {/* Top Row: Clean White Header Banner with crisp border - NO BLACK BLOCKING */}
+            <div className="bg-white border-2 border-slate-900 rounded-lg p-4 sm:p-5 mb-3 flex items-start justify-between gap-4">
+              {/* Left Column: LOKASI BIN & DIRECT NAMA BARANG in Bold Black */}
               <div className="flex-1 pr-2">
-                <div className="text-3xl sm:text-4xl lg:text-5xl font-black font-mono tracking-tight text-amber-200 leading-none">
+                <div className="text-3xl sm:text-4xl lg:text-5xl font-black font-mono tracking-tight text-slate-950 leading-none">
                   LOKASI BIN: {binCode.toUpperCase()}
                 </div>
 
-                {/* Direct Nama Barang: large white text, no "Barang:" prefix */}
-                <div className="text-xl sm:text-2xl font-black tracking-normal text-white mt-2.5 uppercase leading-tight">
+                {/* Direct Nama Barang: large bold black text, no "Barang:" prefix */}
+                <div className="text-xl sm:text-2xl font-black tracking-normal text-slate-900 mt-2.5 uppercase leading-tight">
                   {dominantItemName}
                 </div>
               </div>
 
-              {/* Right Column: "Gudang 5" badge & Larger QR Code */}
+              {/* Right Column: "Gudang 5" badge & Larger QR Code (No solid black fills) */}
               <div className="shrink-0 flex flex-col items-end gap-2">
-                <div className="text-xs sm:text-sm font-black uppercase tracking-wider bg-amber-200 text-slate-950 px-3 py-1 rounded shadow-xs">
+                <div className="text-xs sm:text-sm font-black uppercase tracking-wider bg-white border-2 border-slate-900 text-slate-950 px-3 py-1 rounded shadow-xs">
                   GUDANG 5
                 </div>
 
-                <div className="p-2 bg-white rounded-lg shadow-xs flex flex-col items-center">
+                <div className="p-2 bg-white border border-slate-400 rounded-lg shadow-xs flex flex-col items-center">
                   <QrCodeRenderer
                     value={scanUrl}
                     size={96}
@@ -154,8 +154,8 @@ export const PrintBinManifestModal: React.FC<PrintBinManifestModalProps> = ({
               </div>
             </div>
 
-            {/* Metrics Bar */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 bg-slate-100 border border-slate-300 p-2.5 rounded-lg mb-3 text-xs font-mono">
+            {/* Metrics Bar (White background with crisp border) */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 bg-white border border-slate-400 p-2.5 rounded-lg mb-3 text-xs font-mono">
               <div>
                 <span className="text-[10px] text-slate-500 block uppercase font-sans">Total Pallet</span>
                 <strong className="text-sm sm:text-base text-slate-950">{uniquePallets} Pallet</strong>
@@ -176,10 +176,10 @@ export const PrintBinManifestModal: React.FC<PrintBinManifestModalProps> = ({
               </div>
             </div>
 
-            {/* Table of items (Barcode column removed per instruction!) */}
+            {/* Table of items - Header is clean with black text, no black blocking */}
             <div className="border border-slate-300 rounded-lg overflow-x-auto">
               <table className="w-full text-left text-xs border-collapse">
-                <thead className="bg-slate-900 text-white font-semibold">
+                <thead className="bg-slate-100 border-y-2 border-slate-900 text-slate-950 font-bold">
                   <tr>
                     <th className="py-2.5 px-3 w-10 text-center">No</th>
                     <th className="py-2.5 px-3">No Pallet</th>
