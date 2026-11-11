@@ -376,11 +376,14 @@ async function renderSingleLabelOnDoc(doc: jsPDF, record: PalletRecord): Promise
  * with large Bin QR Code, prominent Bin Code and Item Name visible from afar,
  * Gudang 5 in top right, newest pallet as row No. 1, and no barcode column or signature lines.
  */
-export async function downloadBinManifestPdf(
+/**
+ * Generates an official A4 Portrait Bin Manifest Card (Lembar Muatan Bin)
+ * Formatted cleanly without black blocking, with centered QR code and standard range notation.
+ */
+export async function generateBinManifestPdfDoc(
   binCode: string,
-  records: PalletRecord[],
-  filename?: string
-): Promise<void> {
+  records: PalletRecord[]
+): Promise<jsPDF> {
   // A4 Portrait (210mm wide x 297mm tall)
   // Formatted so the manifest is placed strictly on the top 1/2 of the A4 page (~115-120mm height)
   const doc = new jsPDF({
@@ -390,9 +393,8 @@ export async function downloadBinManifestPdf(
   });
 
   const pageWidth = 210;
-  const pageHeight = 297;
-  const margin = 10;
-  const contentWidth = pageWidth - margin * 2; // 190mm
+  const margin = 8;
+  const contentWidth = pageWidth - margin * 2; // 194mm
 
   // Sort: newest input at No. 1, earliest input at the bottom (slot 8)
   const sortedRecords = sortBinRecordsByLoadingOrder(records);
@@ -404,24 +406,34 @@ export async function downloadBinManifestPdf(
   const uniquePallets = new Set(records.map((r) => r.nomorPallet || r.id)).size;
   const totalQty = records.reduce((sum, r) => sum + (Number(r.qtyPallet) || 0), 0);
 
-  // Header Box (top of A4 sheet, clean white with border - NO BLACK BLOCKING)
-  const headerHeight = 36;
+  // 1. Header Box (40mm height, maximized clean white card with crisp border)
+  const headerHeight = 40;
   doc.setFillColor(255, 255, 255);
   doc.setDrawColor(15, 23, 42); // slate-900 outline
   doc.setLineWidth(0.8);
   doc.roundedRect(margin, margin, contentWidth, headerHeight, 1.5, 1.5, 'FD');
 
-  // Top right: GUDANG 5 badge (clean white with border)
+  // Top right: GUDANG 5 badge (large & bold)
+  const badgeWidth = 32;
+  const badgeX = pageWidth - margin - badgeWidth - 3; // 210 - 8 - 32 - 3 = 167
   doc.setFillColor(248, 250, 252);
   doc.setDrawColor(15, 23, 42);
-  doc.setLineWidth(0.4);
-  doc.roundedRect(pageWidth - margin - 35, margin + 4, 30, 7, 1, 1, 'FD');
+  doc.setLineWidth(0.5);
+  doc.roundedRect(badgeX, margin + 3.5, badgeWidth, 7.5, 1, 1, 'FD');
   doc.setTextColor(15, 23, 42);
-  doc.setFontSize(9);
+  doc.setFontSize(10);
   doc.setFont('helvetica', 'bold');
-  doc.text('GUDANG 5', pageWidth - margin - 20, margin + 8.8, { align: 'center' });
+  doc.text('GUDANG 5', badgeX + badgeWidth / 2, margin + 8.8, { align: 'center' });
 
-  // Large QR Code in header (20mm x 20mm) with crisp border
+  // Large QR Code centered in its box (22mm x 22mm inside 32mm x 26mm box)
+  const qrBoxWidth = 32;
+  const qrBoxHeight = 26;
+  const qrBoxX = badgeX;
+  const qrBoxY = margin + 12;
+  const qrSize = 22; // 22 x 22 mm
+  const qrX = qrBoxX + (qrBoxWidth - qrSize) / 2;
+  const qrY = qrBoxY + (qrBoxHeight - qrSize) / 2;
+
   const binScanUrl =
     typeof window !== 'undefined'
       ? `${window.location.origin}${window.location.pathname}?bin=${encodeURIComponent(binCode)}`
@@ -429,97 +441,109 @@ export async function downloadBinManifestPdf(
 
   try {
     const qrDataUrl = await QRCode.toDataURL(binScanUrl, {
-      margin: 1,
-      width: 250,
+      margin: 0,
+      width: 280,
       color: {
         dark: '#0f172a',
         light: '#ffffff'
       }
     });
-    // White background card for QR
     doc.setFillColor(255, 255, 255);
     doc.setDrawColor(148, 163, 184);
     doc.setLineWidth(0.3);
-    doc.roundedRect(pageWidth - margin - 37, margin + 12.5, 34, 21.5, 1, 1, 'FD');
-    doc.addImage(qrDataUrl, 'PNG', pageWidth - margin - 35, margin + 13.2, 17.5, 17.5);
-    doc.setFontSize(5.5);
-    doc.setFont('helvetica', 'bold');
-    doc.setTextColor(15, 23, 42);
-    doc.text(`SCAN BIN ${binCode}`, pageWidth - margin - 20, margin + 32.8, { align: 'center' });
+    doc.roundedRect(qrBoxX, qrBoxY, qrBoxWidth, qrBoxHeight, 1, 1, 'FD');
+    doc.addImage(qrDataUrl, 'PNG', qrX, qrY, qrSize, qrSize);
   } catch (err) {
     console.error('Failed to generate QR in PDF', err);
   }
 
-  // Left Header Text: Clean Bold Black LOKASI BIN and direct NAMA BARANG (no black background fill)
-  doc.setTextColor(15, 23, 42); // Black font
-  doc.setFontSize(22);
+  // Left Header Text: ENLARGED EXTRA BOLD LOKASI BIN (26pt) & NAMA BARANG (16pt)
+  doc.setTextColor(15, 23, 42);
+  doc.setFontSize(26);
   doc.setFont('helvetica', 'bold');
-  doc.text(`LOKASI BIN: ${binCode.toUpperCase()}`, margin + 6, margin + 14);
+  doc.text(`LOKASI BIN: ${binCode.toUpperCase()}`, margin + 6, margin + 16);
 
-  doc.setTextColor(15, 23, 42); // Black font
-  doc.setFontSize(13);
+  doc.setTextColor(15, 23, 42);
+  doc.setFontSize(16);
   doc.setFont('helvetica', 'bold');
-  const splitItemName = doc.splitTextToSize(dominantItemName.toUpperCase(), contentWidth - 45);
-  doc.text(splitItemName, margin + 6, margin + 24);
+  const splitItemName = doc.splitTextToSize(dominantItemName.toUpperCase(), contentWidth - 48);
+  doc.text(splitItemName, margin + 6, margin + 28);
 
-  // Summary Metrics Bar (Clean light border, white background)
+  // 2. Summary Metrics Bar (Enlarged to 8.5mm, 9pt font)
   let currentY = margin + headerHeight + 3;
-  const metricsHeight = 7.5;
+  const metricsHeight = 8.5;
   doc.setFillColor(255, 255, 255);
   doc.setDrawColor(15, 23, 42);
-  doc.setLineWidth(0.3);
+  doc.setLineWidth(0.4);
   doc.rect(margin, currentY, contentWidth, metricsHeight, 'FD');
 
   doc.setTextColor(15, 23, 42);
-  doc.setFontSize(7.5);
+  doc.setFontSize(9);
   doc.setFont('helvetica', 'bold');
-  doc.text(`Total Pallet: ${uniquePallets} Pallet`, margin + 4, currentY + 5.2);
-  doc.text(`Total Muatan: ${totalQty.toLocaleString('id-ID')} Box`, margin + 48, currentY + 5.2);
-  doc.text(`Jumlah Item: ${records.length} Baris`, margin + 102, currentY + 5.2);
+  doc.text(`Total Pallet: ${uniquePallets} Pallet`, margin + 5, currentY + 5.8);
+  doc.text(`Total Muatan: ${totalQty.toLocaleString('id-ID')} Box`, margin + 50, currentY + 5.8);
+  doc.text(`Jumlah Item: ${records.length} Baris`, margin + 104, currentY + 5.8);
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(71, 85, 105);
-  // User instruction: "format 1/2 A4 tidak perlu" - only display Waktu Cetak
-  doc.text(`Waktu Cetak: ${new Date().toLocaleString('id-ID')}`, margin + 142, currentY + 5.2);
+  doc.text(`Waktu Cetak: ${new Date().toLocaleString('id-ID')}`, margin + 144, currentY + 5.8);
 
   currentY += metricsHeight + 3;
 
-  // Table Headers (Clean white/light background with black text and crisp borders - NO BLACK BLOCKING)
-  const thHeight = 6.5;
+  // 3. Table Headers (Enlarged to 8mm, 8.5pt font, with clear column dividers & generous spacing)
+  const thHeight = 8;
   doc.setFillColor(248, 250, 252);
   doc.setDrawColor(15, 23, 42);
-  doc.setLineWidth(0.5);
+  doc.setLineWidth(0.6);
   doc.rect(margin, currentY, contentWidth, thHeight, 'FD');
 
+  // Column boundaries:
+  // Margin = 8
+  // Col 1 (No): 8 -> 16 (width 8mm, center 12)
+  // Col 2 (No Pallet): 16 -> 34 (width 18mm, text 18)
+  // Col 3 (Kode Item): 34 -> 76 (width 42mm, text 36, ends at ~66 -> 10mm space before line at 76)
+  // Col 4 (Nama Barang): 76 -> 124 (width 48mm, text 79)
+  // Col 5 (Qty): 124 -> 140 (width 16mm, text 126)
+  // Col 6 (No. Batch): 140 -> 156 (width 16mm, text 142)
+  // Col 7 (No. Box): 156 -> 202 (width 46mm, center 179)
+  const colDividers = [16, 34, 76, 124, 140, 156];
+
+  // Draw vertical dividers in table header
+  doc.setDrawColor(203, 213, 225);
+  doc.setLineWidth(0.3);
+  colDividers.forEach((x) => {
+    doc.line(x, currentY, x, currentY + thHeight);
+  });
+
   doc.setTextColor(15, 23, 42); // Solid black text
-  doc.setFontSize(7);
+  doc.setFontSize(8.5);
   doc.setFont('helvetica', 'bold');
 
-  doc.text('No', margin + 3, currentY + 4.5);
-  doc.text('No Pallet', margin + 12, currentY + 4.5);
-  doc.text('Kode Item', margin + 35, currentY + 4.5);
-  doc.text('Nama Barang', margin + 70, currentY + 4.5);
-  doc.text('Qty', margin + 130, currentY + 4.5);
-  doc.text('No. Batch', margin + 148, currentY + 4.5);
-  doc.text('No. Box (Awal - Akhir)', margin + 168, currentY + 4.5);
+  doc.text('No', 12, currentY + 5.5, { align: 'center' });
+  doc.text('No Pallet', 18, currentY + 5.5);
+  doc.text('Kode Item', 36, currentY + 5.5);
+  doc.text('Nama Barang', 79, currentY + 5.5);
+  doc.text('Qty', 126, currentY + 5.5);
+  doc.text('No. Batch', 142, currentY + 5.5);
+  doc.text('No. Box (Awal - Akhir)', 179, currentY + 5.5, { align: 'center' });
 
   currentY += thHeight;
 
-  // Rows
+  // 4. Rows (Enlarged height 8mm, 8.5pt font, with crisp vertical dividers between all columns)
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(6.5);
-  const rowHeight = 6.2;
+  doc.setFontSize(8.5);
+  const rowHeight = 8;
 
   if (sortedRecords.length === 0) {
     doc.setFillColor(255, 255, 255);
-    doc.rect(margin, currentY, contentWidth, 10, 'F');
+    doc.rect(margin, currentY, contentWidth, 12, 'F');
     doc.setDrawColor(226, 232, 240);
-    doc.rect(margin, currentY, contentWidth, 10, 'S');
+    doc.rect(margin, currentY, contentWidth, 12, 'S');
     doc.setTextColor(100, 116, 139);
-    doc.text(`Belum ada muatan pallet tersimpan di Bin ${binCode}`, margin + 60, currentY + 6.5);
-    currentY += 10;
+    doc.text(`Belum ada muatan pallet tersimpan di Bin ${binCode}`, margin + 60, currentY + 7.5);
+    currentY += 12;
   } else {
     sortedRecords.forEach((r, i) => {
-      // In case of more items, add page
+      // In case of extra items, add page
       if (currentY > 275) {
         doc.addPage('a4', 'portrait');
         currentY = margin + 4;
@@ -531,41 +555,89 @@ export async function downloadBinManifestPdf(
       doc.setDrawColor(226, 232, 240);
       doc.rect(margin, currentY, contentWidth, rowHeight, 'S');
 
+      // Draw subtle vertical column divider lines in each row
+      doc.setDrawColor(226, 232, 240);
+      doc.setLineWidth(0.3);
+      colDividers.forEach((x) => {
+        doc.line(x, currentY, x, currentY + rowHeight);
+      });
+
+      // Col 1: No
+      doc.setFont('helvetica', 'bold');
       doc.setTextColor(71, 85, 105);
-      doc.text(String(i + 1), margin + 3, currentY + 4.2);
+      doc.setFontSize(8.5);
+      doc.text(String(i + 1), 12, currentY + 5.3, { align: 'center' });
 
+      // Col 2: No Pallet
       doc.setFont('helvetica', 'bold');
       doc.setTextColor(15, 23, 42);
-      doc.text(r.nomorPallet || '-', margin + 12, currentY + 4.2);
+      doc.text(r.nomorPallet || '-', 18, currentY + 5.3);
 
-      doc.setTextColor(29, 78, 216);
-      doc.text(r.kodeItem || '-', margin + 35, currentY + 4.2);
-
-      doc.setFont('helvetica', 'normal');
-      doc.setTextColor(15, 23, 42);
-      const name = r.namaBarang.length > 36 ? r.namaBarang.substring(0, 34) + '...' : r.namaBarang;
-      doc.text(name, margin + 70, currentY + 4.2);
-
+      // Col 3: Kode Item (8pt bold blue, starts at 36, clear gap before divider at 76)
       doc.setFont('helvetica', 'bold');
-      doc.text(`${r.qtyPallet} ${r.unit}`, margin + 130, currentY + 4.2);
-
+      doc.setFontSize(8);
       doc.setTextColor(29, 78, 216);
-      doc.text(r.noBatch || '-', margin + 148, currentY + 4.2);
+      doc.text(r.kodeItem || '-', 36, currentY + 5.3);
 
+      // Col 4: Nama Barang (Starts at 79 after vertical divider line at 76)
       doc.setFont('helvetica', 'normal');
-      doc.setTextColor(51, 65, 85);
-      const boxRange = `${r.boxAwal || r.batchAwal || '-'} → ${r.boxAkhir || r.batchAkhir || '-'}`;
-      doc.text(boxRange, margin + 168, currentY + 4.2);
+      doc.setFontSize(8.5);
+      doc.setTextColor(15, 23, 42);
+      const name = r.namaBarang.length > 28 ? r.namaBarang.substring(0, 26) + '...' : r.namaBarang;
+      doc.text(name, 79, currentY + 5.3);
+
+      // Col 5: Qty
+      doc.setFont('helvetica', 'bold');
+      doc.text(`${r.qtyPallet} ${r.unit}`, 126, currentY + 5.3);
+
+      // Col 6: No. Batch
+      doc.setTextColor(29, 78, 216);
+      doc.text(r.noBatch || '-', 142, currentY + 5.3);
+
+      // Col 7: No. Box (Awal - Akhir) - Centered at 179
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(30, 41, 59);
+      const startBox = (r.boxAwal || r.batchAwal || '').trim();
+      const endBox = (r.boxAkhir || r.batchAkhir || '').trim();
+      let boxRangeText = '-';
+      if (startBox && endBox) {
+        boxRangeText = `${startBox} - ${endBox}`;
+      } else if (startBox || endBox) {
+        boxRangeText = startBox || endBox;
+      }
+      doc.text(boxRangeText, 179, currentY + 5.3, { align: 'center' });
 
       currentY += rowHeight;
     });
   }
 
-  // Note: Entire manifest occupies approx. Y = 10mm to 118mm (the top half of A4 portrait).
-  // The bottom half remains blank so it prints only on 1/2 of the A4 paper.
+  return doc;
+}
 
+/**
+ * Downloads the official Bin Manifest PDF file.
+ */
+export async function downloadBinManifestPdf(
+  binCode: string,
+  records: PalletRecord[],
+  filename?: string
+): Promise<void> {
+  const doc = await generateBinManifestPdfDoc(binCode, records);
   const outputName = filename || `Kartu_Muatan_Bin_${binCode.replace('.', '_')}.pdf`;
   doc.save(outputName);
 }
+
+/**
+ * Opens the official Bin Manifest PDF directly in a new browser tab.
+ */
+export async function openBinManifestPdfInNewTab(
+  binCode: string,
+  records: PalletRecord[]
+): Promise<void> {
+  const doc = await generateBinManifestPdfDoc(binCode, records);
+  const blobUrl = doc.output('bloburl');
+  window.open(blobUrl, '_blank');
+}
+
 
 

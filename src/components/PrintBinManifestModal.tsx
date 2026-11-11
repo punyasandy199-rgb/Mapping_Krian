@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { PalletRecord } from '../types/warehouse';
 import { QrCodeRenderer } from './QrCodeRenderer';
-import { downloadBinManifestPdf } from '../utils/pdfGenerator';
+import { downloadBinManifestPdf, openBinManifestPdfInNewTab } from '../utils/pdfGenerator';
 import { exportPalletsToCsv } from '../utils/exporter';
 import { sortBinRecordsByLoadingOrder } from '../utils/binSorting';
 import {
@@ -14,7 +14,8 @@ import {
   Calendar,
   FileSpreadsheet,
   CheckCircle2,
-  Tag
+  Tag,
+  ExternalLink
 } from 'lucide-react';
 
 interface PrintBinManifestModalProps {
@@ -75,6 +76,18 @@ export const PrintBinManifestModal: React.FC<PrintBinManifestModalProps> = ({
     }
   };
 
+  const handleOpenPdfInNewTab = async () => {
+    try {
+      setIsExportingPdf(true);
+      await openBinManifestPdfInNewTab(binCode, records);
+    } catch (err) {
+      console.error(err);
+      alert('Gagal membuka PDF');
+    } finally {
+      setIsExportingPdf(false);
+    }
+  };
+
   const handleExportCsv = () => {
     exportPalletsToCsv(records, `muatan_bin_${binCode.replace('.', '_')}`);
   };
@@ -118,102 +131,101 @@ export const PrintBinManifestModal: React.FC<PrintBinManifestModalProps> = ({
             </div>
           )}
 
-          {/* Sheet Document - Designed for clean ink-friendly printing (Portrait 1/2 A4, NO BLACK BLOCKING) */}
+          {/* Sheet Document - Designed for clean ink-friendly printing (Portrait 1/2 A4, MAXIMIZED FONTS) */}
           <div className="bg-white text-slate-900 border-2 border-slate-900 rounded-xl p-5 sm:p-6 shadow-md print:border-none print:shadow-none print:p-0 print:rounded-none">
             {/* Top Row: Clean White Header Banner with crisp border - NO BLACK BLOCKING */}
-            <div className="bg-white border-2 border-slate-900 rounded-lg p-4 sm:p-5 mb-3 flex items-start justify-between gap-4">
-              {/* Left Column: LOKASI BIN & DIRECT NAMA BARANG in Bold Black */}
+            <div className="bg-white border-2 border-slate-900 rounded-xl p-4 sm:p-6 mb-3 flex items-start justify-between gap-4">
+              {/* Left Column: LOKASI BIN & DIRECT NAMA BARANG in Extra Large Bold Black */}
               <div className="flex-1 pr-2">
-                <div className="text-3xl sm:text-4xl lg:text-5xl font-black font-mono tracking-tight text-slate-950 leading-none">
+                <div className="text-4xl sm:text-5xl lg:text-6xl font-black font-mono tracking-tight text-slate-950 leading-none">
                   LOKASI BIN: {binCode.toUpperCase()}
                 </div>
 
-                {/* Direct Nama Barang: large bold black text, no "Barang:" prefix */}
-                <div className="text-xl sm:text-2xl font-black tracking-normal text-slate-900 mt-2.5 uppercase leading-tight">
+                {/* Direct Nama Barang: extra large bold black text, no "Barang:" prefix */}
+                <div className="text-2xl sm:text-3xl lg:text-4xl font-black tracking-normal text-slate-900 mt-3 uppercase leading-tight">
                   {dominantItemName}
                 </div>
               </div>
 
-              {/* Right Column: "Gudang 5" badge & Larger QR Code (No solid black fills) */}
-              <div className="shrink-0 flex flex-col items-end gap-2">
-                <div className="text-xs sm:text-sm font-black uppercase tracking-wider bg-white border-2 border-slate-900 text-slate-950 px-3 py-1 rounded shadow-xs">
+              {/* Right Column: "Gudang 5" badge & Centered QR Code */}
+              <div className="shrink-0 flex flex-col items-center gap-2.5">
+                <div className="text-sm sm:text-base font-black uppercase tracking-wider bg-white border-2 border-slate-900 text-slate-950 px-4 py-1.5 rounded-lg shadow-xs text-center w-full">
                   GUDANG 5
                 </div>
 
-                <div className="p-2 bg-white border border-slate-400 rounded-lg shadow-xs flex flex-col items-center">
+                <div className="p-2.5 bg-white border border-slate-400 rounded-xl shadow-xs flex items-center justify-center">
                   <QrCodeRenderer
                     value={scanUrl}
-                    size={96}
+                    size={100}
                     showLabel={false}
                     className="p-0 border-0 shadow-none"
                   />
-                  <span className="text-[9px] font-bold font-mono text-slate-900 mt-1 uppercase tracking-wider">
-                    SCAN BIN {binCode}
-                  </span>
                 </div>
               </div>
             </div>
 
-            {/* Metrics Bar (White background with crisp border) */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 bg-white border border-slate-400 p-2.5 rounded-lg mb-3 text-xs font-mono">
+            {/* Metrics Bar (Enlarged white background with crisp border) */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 bg-white border border-slate-400 p-3 rounded-lg mb-3 font-mono">
               <div>
-                <span className="text-[10px] text-slate-500 block uppercase font-sans">Total Pallet</span>
-                <strong className="text-sm sm:text-base text-slate-950">{uniquePallets} Pallet</strong>
+                <span className="text-xs text-slate-500 block uppercase font-sans font-bold">Total Pallet</span>
+                <strong className="text-base sm:text-lg font-black text-slate-950">{uniquePallets} Pallet</strong>
               </div>
               <div>
-                <span className="text-[10px] text-slate-500 block uppercase font-sans">Total Muatan</span>
-                <strong className="text-sm sm:text-base text-slate-950">{totalQty.toLocaleString('id-ID')} Box</strong>
+                <span className="text-xs text-slate-500 block uppercase font-sans font-bold">Total Muatan</span>
+                <strong className="text-base sm:text-lg font-black text-slate-950">{totalQty.toLocaleString('id-ID')} Box</strong>
               </div>
               <div>
-                <span className="text-[10px] text-slate-500 block uppercase font-sans">Jumlah Item</span>
-                <strong className="text-sm sm:text-base text-slate-950">{records.length} Baris</strong>
+                <span className="text-xs text-slate-500 block uppercase font-sans font-bold">Jumlah Item</span>
+                <strong className="text-base sm:text-lg font-black text-slate-950">{records.length} Baris</strong>
               </div>
               <div>
-                <span className="text-[10px] text-slate-500 block uppercase font-sans">Waktu Cetak</span>
-                <span className="text-xs font-bold text-slate-800">
+                <span className="text-xs text-slate-500 block uppercase font-sans font-bold">Waktu Cetak</span>
+                <span className="text-xs sm:text-sm font-bold text-slate-800">
                   {new Date().toLocaleString('id-ID')}
                 </span>
               </div>
             </div>
 
-            {/* Table of items - Header is clean with black text, no black blocking */}
+            {/* Table of items - Header is clean with black text, vertical column dividers & generous spacing */}
             <div className="border border-slate-300 rounded-lg overflow-x-auto">
-              <table className="w-full text-left text-xs border-collapse">
-                <thead className="bg-slate-100 border-y-2 border-slate-900 text-slate-950 font-bold">
+              <table className="w-full text-left border-collapse">
+                <thead className="bg-slate-100 border-y-2 border-slate-900 text-slate-950 font-black text-xs sm:text-sm">
                   <tr>
-                    <th className="py-2.5 px-3 w-10 text-center">No</th>
-                    <th className="py-2.5 px-3">No Pallet</th>
-                    <th className="py-2.5 px-3">Kode Item</th>
-                    <th className="py-2.5 px-3">Nama Barang</th>
-                    <th className="py-2.5 px-3 text-right">Qty</th>
-                    <th className="py-2.5 px-3">No. Batch</th>
-                    <th className="py-2.5 px-3">No. Box (Awal - Akhir)</th>
+                    <th className="py-3 px-2.5 w-12 text-center border-r border-slate-300">No</th>
+                    <th className="py-3 px-3 w-28 border-r border-slate-300">No Pallet</th>
+                    <th className="py-3 px-3.5 w-44 border-r border-slate-300">Kode Item</th>
+                    <th className="py-3 px-4 border-r border-slate-300">Nama Barang</th>
+                    <th className="py-3 px-3 w-24 text-right border-r border-slate-300">Qty</th>
+                    <th className="py-3 px-3 w-28 border-r border-slate-300">No. Batch</th>
+                    <th className="py-3 px-4 min-w-[170px] text-center">No. Box (Awal - Akhir)</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-200 font-mono text-xs">
+                <tbody className="divide-y divide-slate-200 font-mono text-xs sm:text-sm">
                   {sortedRecords.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="py-8 text-center text-slate-400 italic font-sans">
+                      <td colSpan={7} className="py-8 text-center text-slate-400 italic font-sans text-sm">
                         Belum ada muatan pallet di Bin {binCode}
                       </td>
                     </tr>
                   ) : (
                     sortedRecords.map((r, idx) => (
                       <tr key={r.id} className={idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/70'}>
-                        <td className="py-2.5 px-3 text-center font-bold text-slate-500">{idx + 1}</td>
-                        <td className="py-2.5 px-3 font-bold text-slate-900">
-                          <span className="bg-amber-100 text-amber-900 px-2 py-0.5 rounded border border-amber-300 font-bold">
+                        <td className="py-3 px-2.5 text-center font-bold text-slate-500 border-r border-slate-200">{idx + 1}</td>
+                        <td className="py-3 px-3 font-black text-slate-900 border-r border-slate-200">
+                          <span className="bg-amber-100 text-amber-900 px-2.5 py-1 rounded border border-amber-300 font-black text-xs sm:text-sm">
                             {r.nomorPallet || '-'}
                           </span>
                         </td>
-                        <td className="py-2.5 px-3 font-bold text-blue-700">{r.kodeItem || '-'}</td>
-                        <td className="py-2.5 px-3 font-sans font-bold text-slate-900">{r.namaBarang}</td>
-                        <td className="py-2.5 px-3 text-right font-bold text-slate-900">
-                          {r.qtyPallet} <span className="font-normal text-slate-600 font-sans">{r.unit}</span>
+                        <td className="py-3 px-3.5 font-bold text-blue-700 whitespace-nowrap border-r border-slate-200">{r.kodeItem || '-'}</td>
+                        <td className="py-3 px-4 font-sans font-bold text-slate-900 border-r border-slate-200">{r.namaBarang}</td>
+                        <td className="py-3 px-3 text-right font-black text-slate-900 border-r border-slate-200">
+                          {r.qtyPallet} <span className="font-normal text-slate-600 font-sans text-xs">{r.unit}</span>
                         </td>
-                        <td className="py-2.5 px-3 font-bold text-blue-700">{r.noBatch || '-'}</td>
-                        <td className="py-2.5 px-3 text-slate-700">
-                          {r.boxAwal || r.batchAwal || '-'} → {r.boxAkhir || r.batchAkhir || '-'}
+                        <td className="py-3 px-3 font-bold text-blue-700 border-r border-slate-200">{r.noBatch || '-'}</td>
+                        <td className="py-3 px-4 text-center font-bold text-slate-900">
+                          {r.boxAwal || r.batchAwal
+                            ? `${r.boxAwal || r.batchAwal} - ${r.boxAkhir || r.batchAkhir}`
+                            : '-'}
                         </td>
                       </tr>
                     ))
@@ -238,23 +250,34 @@ export const PrintBinManifestModal: React.FC<PrintBinManifestModalProps> = ({
             <span>Ekspor Excel (.csv)</span>
           </button>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={handleOpenPdfInNewTab}
+              disabled={isExportingPdf}
+              className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-950/60 hover:bg-blue-100 dark:hover:bg-blue-900/60 border border-blue-300 dark:border-blue-800 rounded-lg shadow-xs transition-all disabled:opacity-50"
+              title="Buka file PDF langsung di penampil browser / tab baru"
+            >
+              <ExternalLink className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
+              <span>Buka File PDF Asli</span>
+            </button>
+
             <button
               type="button"
               onClick={handleDownloadPdf}
               disabled={isExportingPdf}
-              className="flex items-center gap-1.5 px-4 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg shadow-sm transition-all disabled:opacity-50"
+              className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg shadow-xs transition-all disabled:opacity-50"
             >
-              <FileDown className="w-4 h-4" />
-              <span>Unduh Dokumen PDF Bin</span>
+              <FileDown className="w-3.5 h-3.5" />
+              <span>Unduh PDF</span>
             </button>
 
             <button
               type="button"
               onClick={handlePrint}
-              className="flex items-center gap-1.5 px-4 py-2 text-xs font-bold text-white bg-slate-900 hover:bg-slate-800 rounded-lg shadow-sm transition-all"
+              className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-white bg-slate-900 hover:bg-slate-800 rounded-lg shadow-xs transition-all"
             >
-              <Printer className="w-4 h-4" />
+              <Printer className="w-3.5 h-3.5" />
               <span>Cetak ke Printer</span>
             </button>
           </div>

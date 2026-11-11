@@ -14,6 +14,7 @@ import { WarehouseBinViewer } from './components/WarehouseBinViewer';
 import { BarcodeScannerModal } from './components/BarcodeScannerModal';
 import { MasterItemModal } from './components/MasterItemModal';
 import { BinDetailModal } from './components/BinDetailModal';
+import { PrintBinManifestModal } from './components/PrintBinManifestModal';
 import { DataBackupModal } from './components/DataBackupModal';
 import {
   subscribeToPalletRecords,
@@ -115,15 +116,17 @@ export default function App() {
   // Bin detail viewer state (opened via QR scan or click)
   const [selectedBinForModal, setSelectedBinForModal] = useState<string | null>(null);
   const [isBinModalOpen, setIsBinModalOpen] = useState(false);
+  const [isPrintManifestOpen, setIsPrintManifestOpen] = useState(false);
 
   // Check URL query params on load: if user scanned a QR code like ?bin=5A.1
+  // Opens the exact printed manifest sheet (persis seperti yang dicetak)!
   useEffect(() => {
     try {
       const searchParams = new URLSearchParams(window.location.search);
       const binParam = searchParams.get('bin');
       if (binParam) {
         setSelectedBinForModal(binParam.toUpperCase());
-        setIsBinModalOpen(true);
+        setIsPrintManifestOpen(true);
       }
     } catch (e) {
       console.error('Failed to parse URL query:', e);
@@ -636,7 +639,19 @@ export default function App() {
         onOpenBinDetail={handleOpenBinDetail}
       />
 
-      {/* Bin Detail List Modal (Opened when QR code is scanned or clicked) */}
+      {/* Bin Print Manifest Sheet Modal (Opened when QR code is scanned - persis seperti apa yang dicetak!) */}
+      {selectedBinForModal && isPrintManifestOpen && (
+        <PrintBinManifestModal
+          isOpen={isPrintManifestOpen}
+          onClose={() => setIsPrintManifestOpen(false)}
+          binCode={selectedBinForModal}
+          records={records.filter(
+            (r) => r.lokasiBin.toUpperCase() === selectedBinForModal.toUpperCase()
+          )}
+        />
+      )}
+
+      {/* Bin Detail List Modal (Opened via manual click) */}
       <BinDetailModal
         binCode={selectedBinForModal}
         records={records}
