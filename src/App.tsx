@@ -24,7 +24,9 @@ import {
   subscribeToMasterItems,
   saveMasterItem,
   deleteMasterItem,
-  seedMasterItems
+  seedMasterItems,
+  updatePalletsOutbound,
+  restorePalletsToBin
 } from './services/firebase';
 import {
   Boxes,
@@ -316,6 +318,57 @@ export default function App() {
     });
   };
 
+  const handleProcessOutbound = async (
+    palletIds: string[],
+    destination: string,
+    petugas?: string
+  ) => {
+    const nowIso = new Date().toISOString();
+    setRecords((prev) =>
+      prev.map((r) => {
+        if (palletIds.includes(r.id)) {
+          return {
+            ...r,
+            status: 'OUT',
+            tujuanPengambilan: destination,
+            tanggalPengambilan: nowIso,
+            petugasPengambilan: petugas || 'Petugas Lapangan'
+          };
+        }
+        return r;
+      })
+    );
+
+    try {
+      await updatePalletsOutbound(palletIds, destination, petugas);
+    } catch (err) {
+      console.error('Failed to update outbound in Firestore:', err);
+    }
+  };
+
+  const handleRestoreOutbound = async (palletIds: string[]) => {
+    setRecords((prev) =>
+      prev.map((r) => {
+        if (palletIds.includes(r.id)) {
+          return {
+            ...r,
+            status: 'IN',
+            tujuanPengambilan: undefined,
+            tanggalPengambilan: undefined,
+            petugasPengambilan: undefined
+          };
+        }
+        return r;
+      })
+    );
+
+    try {
+      await restorePalletsToBin(palletIds);
+    } catch (err) {
+      console.error('Failed to restore outbound pallets in Firestore:', err);
+    }
+  };
+
   const handleImportBackupData = (
     newMaster: MasterItem[],
     newRecords: PalletRecord[],
@@ -595,6 +648,8 @@ export default function App() {
             onDeleteRecord={handleDeleteRecord}
             onClearAll={handleClearAllRecords}
             onNewInput={() => setActiveTab('input')}
+            onProcessOutbound={handleProcessOutbound}
+            onRestoreOutbound={handleRestoreOutbound}
           />
         )}
 
@@ -648,6 +703,8 @@ export default function App() {
           records={records.filter(
             (r) => r.lokasiBin.toUpperCase() === selectedBinForModal.toUpperCase()
           )}
+          onProcessOutbound={handleProcessOutbound}
+          onRestoreOutbound={handleRestoreOutbound}
         />
       )}
 
@@ -657,6 +714,8 @@ export default function App() {
         records={records}
         isOpen={isBinModalOpen}
         onClose={() => setIsBinModalOpen(false)}
+        onProcessOutbound={handleProcessOutbound}
+        onRestoreOutbound={handleRestoreOutbound}
       />
 
       {/* JSON Backup & Cross-Domain Sync Modal */}

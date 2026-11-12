@@ -25,6 +25,8 @@ interface BinDetailModalProps {
   isOpen: boolean;
   onClose: () => void;
   onPrintPallet?: (record: PalletRecord) => void;
+  onProcessOutbound?: (palletIds: string[], destination: string, petugas?: string) => Promise<void> | void;
+  onRestoreOutbound?: (palletIds: string[]) => Promise<void> | void;
 }
 
 export const BinDetailModal: React.FC<BinDetailModalProps> = ({
@@ -32,7 +34,9 @@ export const BinDetailModal: React.FC<BinDetailModalProps> = ({
   records,
   isOpen,
   onClose,
-  onPrintPallet
+  onPrintPallet,
+  onProcessOutbound,
+  onRestoreOutbound
 }) => {
   const [isPrintManifestOpen, setIsPrintManifestOpen] = useState(false);
   const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
@@ -40,13 +44,15 @@ export const BinDetailModal: React.FC<BinDetailModalProps> = ({
   if (!isOpen || !binCode) return null;
 
   // Filter and sort all items stored in this Bin:
-  // Item entered first is at the very end; newly added pallets fill previous numbers (No. 1).
-  const itemsInBin = sortBinRecordsByLoadingOrder(
-    records.filter((r) => r.lokasiBin.toUpperCase() === binCode.toUpperCase())
+  const rawBinRecords = records.filter(
+    (r) => r.lokasiBin.toUpperCase() === binCode.toUpperCase()
   );
+  const itemsInBin = sortBinRecordsByLoadingOrder(rawBinRecords);
+  const activeItems = itemsInBin.filter((r) => r.status !== 'OUT');
+  const pickedItems = itemsInBin.filter((r) => r.status === 'OUT');
 
-  const totalQty = itemsInBin.reduce((sum, item) => sum + (Number(item.qtyPallet) || 0), 0);
-  const uniquePallets = new Set(itemsInBin.map((item) => item.nomorPallet || item.id)).size;
+  const totalActiveQty = activeItems.reduce((sum, item) => sum + (Number(item.qtyPallet) || 0), 0);
+  const uniqueActivePallets = new Set(activeItems.map((item) => item.nomorPallet || item.id)).size;
 
   const handleExportBin = () => {
     exportPalletsToCsv(itemsInBin, `muatan_bin_${binCode.replace('.', '_')}`);
@@ -106,28 +112,33 @@ export const BinDetailModal: React.FC<BinDetailModalProps> = ({
         <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 my-4">
           <div className="p-3 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200 dark:border-slate-700">
             <div className="text-[11px] font-semibold text-slate-500 uppercase flex items-center gap-1">
-              <Box className="w-3.5 h-3.5 text-blue-600" /> Jumlah Pallet
+              <Box className="w-3.5 h-3.5 text-blue-600" /> Pallet Sisa di Bin
             </div>
             <div className="text-xl font-bold font-mono text-slate-900 dark:text-white mt-0.5">
-              {uniquePallets} Pallet
+              {uniqueActivePallets} <span className="text-xs font-normal text-slate-500">Pallet</span>
+            </div>
+            {pickedItems.length > 0 && (
+              <span className="text-[10px] text-amber-600 dark:text-amber-400 font-semibold block mt-0.5">
+                {pickedItems.length} Pallet telah diambil
+              </span>
+            )}
+          </div>
+
+          <div className="p-3 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200 dark:border-slate-700">
+            <div className="text-[11px] font-semibold text-slate-500 uppercase flex items-center gap-1">
+              <Layers className="w-3.5 h-3.5 text-emerald-600" /> Muatan Sisa di Bin
+            </div>
+            <div className="text-xl font-bold font-mono text-slate-900 dark:text-white mt-0.5">
+              {totalActiveQty.toLocaleString('id-ID')} Box
             </div>
           </div>
 
           <div className="p-3 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200 dark:border-slate-700">
             <div className="text-[11px] font-semibold text-slate-500 uppercase flex items-center gap-1">
-              <Layers className="w-3.5 h-3.5 text-emerald-600" /> Total Qty
+              <Tag className="w-3.5 h-3.5 text-purple-600" /> Baris Item Aktif
             </div>
             <div className="text-xl font-bold font-mono text-slate-900 dark:text-white mt-0.5">
-              {totalQty.toLocaleString('id-ID')} Box
-            </div>
-          </div>
-
-          <div className="p-3 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200 dark:border-slate-700">
-            <div className="text-[11px] font-semibold text-slate-500 uppercase flex items-center gap-1">
-              <Tag className="w-3.5 h-3.5 text-purple-600" /> Total Item / SKU
-            </div>
-            <div className="text-xl font-bold font-mono text-slate-900 dark:text-white mt-0.5">
-              {itemsInBin.length} Item
+              {activeItems.length} Baris
             </div>
           </div>
 
@@ -173,51 +184,72 @@ export const BinDetailModal: React.FC<BinDetailModalProps> = ({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                {itemsInBin.map((item, idx) => (
-                  <tr
-                    key={item.id}
-                    className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors"
-                  >
-                    <td className="py-2.5 px-3 text-center font-bold text-slate-500 font-mono">
-                      {idx + 1}
-                    </td>
-                    <td className="py-2.5 px-3 font-mono font-bold text-slate-900 dark:text-white">
-                      <span className="bg-amber-100 dark:bg-amber-950/60 text-amber-900 dark:text-amber-200 px-2 py-0.5 rounded border border-amber-300 dark:border-amber-900">
-                        {item.nomorPallet || '-'}
-                      </span>
-                    </td>
-                    <td className="py-2.5 px-3 font-mono font-bold text-blue-600 dark:text-blue-400">
-                      {item.kodeItem || '-'}
-                    </td>
-                    <td className="py-2.5 px-3 font-medium text-slate-900 dark:text-slate-100">
-                      {item.namaBarang}
-                    </td>
-                    <td className="py-2.5 px-3 text-right font-mono font-bold tabular-nums text-slate-900 dark:text-white">
-                      {item.qtyPallet} <span className="font-normal text-slate-500">{item.unit}</span>
-                    </td>
-                    <td className="py-2.5 px-3 font-mono font-bold text-blue-700 dark:text-blue-400">
-                      {item.noBatch || '-'}
-                    </td>
-                    <td className="py-2.5 px-3 font-mono text-[11px] text-slate-600 dark:text-slate-400">
-                      {item.boxAwal || item.batchAwal || '-'} → {item.boxAkhir || item.batchAkhir || '-'}
-                    </td>
-                    <td className="py-2.5 px-3 font-mono text-[11px] text-slate-800 dark:text-slate-200">
-                      {item.barcodeNumber}
-                    </td>
-                    <td className="py-2.5 px-3 text-center">
-                      {onPrintPallet && (
-                        <button
-                          type="button"
-                          onClick={() => onPrintPallet(item)}
-                          className="p-1 text-slate-600 hover:text-blue-600 rounded"
-                          title="Cetak label thermal pallet ini"
-                        >
-                          <Printer className="w-3.5 h-3.5" />
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
+                {itemsInBin.map((item, idx) => {
+                  const isOut = item.status === 'OUT';
+
+                  return (
+                    <tr
+                      key={item.id}
+                      className={`transition-colors ${
+                        isOut
+                          ? 'bg-slate-100/60 dark:bg-slate-800/20 text-slate-400'
+                          : 'hover:bg-slate-50/80 dark:hover:bg-slate-800/40'
+                      }`}
+                    >
+                      <td className="py-2.5 px-3 text-center font-bold text-slate-500 font-mono">
+                        {idx + 1}
+                      </td>
+                      <td className="py-2.5 px-3 font-mono font-bold text-slate-900 dark:text-white">
+                        <div className="flex items-center gap-1.5">
+                          <span
+                            className={`px-2 py-0.5 rounded border text-xs ${
+                              isOut
+                                ? 'bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-300 dark:border-slate-700 line-through'
+                                : 'bg-amber-100 dark:bg-amber-950/60 text-amber-900 dark:text-amber-200 border-amber-300 dark:border-amber-900'
+                            }`}
+                          >
+                            {item.nomorPallet || '-'}
+                          </span>
+                          {isOut && (
+                            <span className="text-[10px] font-sans font-bold px-1.5 py-0.2 rounded bg-amber-100 text-amber-800 border border-amber-300">
+                              OUT: {item.tujuanPengambilan || 'Diambil'}
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="py-2.5 px-3 font-mono font-bold text-blue-600 dark:text-blue-400">
+                        {item.kodeItem || '-'}
+                      </td>
+                      <td className="py-2.5 px-3 font-medium text-slate-900 dark:text-slate-100">
+                        {item.namaBarang}
+                      </td>
+                      <td className="py-2.5 px-3 text-right font-mono font-bold tabular-nums text-slate-900 dark:text-white">
+                        {item.qtyPallet} <span className="font-normal text-slate-500">{item.unit}</span>
+                      </td>
+                      <td className="py-2.5 px-3 font-mono font-bold text-blue-700 dark:text-blue-400">
+                        {item.noBatch || '-'}
+                      </td>
+                      <td className="py-2.5 px-3 font-mono text-[11px] text-slate-600 dark:text-slate-400">
+                        {item.boxAwal || item.batchAwal || '-'} - {item.boxAkhir || item.batchAkhir || '-'}
+                      </td>
+                      <td className="py-2.5 px-3 font-mono text-[11px] text-slate-800 dark:text-slate-200">
+                        {item.barcodeNumber}
+                      </td>
+                      <td className="py-2.5 px-3 text-center">
+                        {onPrintPallet && (
+                          <button
+                            type="button"
+                            onClick={() => onPrintPallet(item)}
+                            className="p-1 text-slate-600 hover:text-blue-600 rounded"
+                            title="Cetak label thermal pallet ini"
+                          >
+                            <Printer className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           )}
@@ -277,6 +309,8 @@ export const BinDetailModal: React.FC<BinDetailModalProps> = ({
           onClose={() => setIsPrintManifestOpen(false)}
           binCode={binCode}
           records={itemsInBin}
+          onProcessOutbound={onProcessOutbound}
+          onRestoreOutbound={onRestoreOutbound}
         />
       </div>
     </div>

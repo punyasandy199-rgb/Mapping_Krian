@@ -38,13 +38,17 @@ interface PalletHistoryTableProps {
   onDeleteRecord: (id: string) => void;
   onClearAll: () => void;
   onNewInput: () => void;
+  onProcessOutbound?: (palletIds: string[], destination: string, petugas?: string) => Promise<void> | void;
+  onRestoreOutbound?: (palletIds: string[]) => Promise<void> | void;
 }
 
 export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
   records,
   onDeleteRecord,
   onClearAll,
-  onNewInput
+  onNewInput,
+  onProcessOutbound,
+  onRestoreOutbound
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedBinFilter, setSelectedBinFilter] = useState<string>('ALL');
@@ -682,9 +686,22 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
                                   {rowIdx + 1}
                                 </td>
                                 <td className="py-2.5 px-3 font-bold text-slate-900 dark:text-slate-100">
-                                  <span className="bg-amber-100 dark:bg-amber-950/60 text-amber-900 dark:text-amber-200 px-2 py-0.5 rounded border border-amber-300 dark:border-amber-900">
-                                    {item.nomorPallet || '-'}
-                                  </span>
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <span
+                                      className={`px-2 py-0.5 rounded border text-xs ${
+                                        item.status === 'OUT'
+                                          ? 'bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-300 dark:border-slate-700 line-through'
+                                          : 'bg-amber-100 dark:bg-amber-950/60 text-amber-900 dark:text-amber-200 border-amber-300 dark:border-amber-900'
+                                      }`}
+                                    >
+                                      {item.nomorPallet || '-'}
+                                    </span>
+                                    {item.status === 'OUT' && (
+                                      <span className="text-[10px] font-sans font-bold px-1.5 py-0.2 rounded bg-amber-100 text-amber-800 border border-amber-300">
+                                        OUT: {item.tujuanPengambilan || 'Diambil'}
+                                      </span>
+                                    )}
+                                  </div>
                                 </td>
                                 <td className="py-2.5 px-3 font-bold text-blue-600 dark:text-blue-400">
                                   {item.kodeItem || '-'}
@@ -702,7 +719,7 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
                                   {item.noBatch || '-'}
                                 </td>
                                 <td className="py-2.5 px-3 text-[11px] text-slate-600 dark:text-slate-400">
-                                  {item.boxAwal || item.batchAwal || '-'} → {item.boxAkhir || item.batchAkhir || '-'}
+                                  {item.boxAwal || item.batchAwal || '-'} - {item.boxAkhir || item.batchAkhir || '-'}
                                 </td>
                                 <td className="py-2.5 px-3 text-[11px] text-slate-800 dark:text-slate-200 font-bold">
                                   {item.barcodeNumber}
@@ -813,9 +830,22 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
                         </button>
                       </td>
                       <td className="py-3 px-3 font-bold text-slate-900 dark:text-slate-100">
-                        <span className="bg-amber-100 dark:bg-amber-950/60 text-amber-900 dark:text-amber-200 px-2 py-0.5 rounded font-bold border border-amber-300 dark:border-amber-900">
-                          {item.nomorPallet || '-'}
-                        </span>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span
+                            className={`px-2 py-0.5 rounded font-bold border text-xs ${
+                              item.status === 'OUT'
+                                ? 'bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-300 dark:border-slate-700 line-through'
+                                : 'bg-amber-100 dark:bg-amber-950/60 text-amber-900 dark:text-amber-200 border-amber-300 dark:border-amber-900'
+                            }`}
+                          >
+                            {item.nomorPallet || '-'}
+                          </span>
+                          {item.status === 'OUT' && (
+                            <span className="text-[10px] font-sans font-bold px-1.5 py-0.2 rounded bg-amber-100 text-amber-800 border border-amber-300">
+                              OUT: {item.tujuanPengambilan || 'Diambil'}
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td className="py-3 px-3">
                         <span className="text-xs font-bold text-blue-700 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/60 px-2 py-0.5 rounded border border-blue-200 dark:border-blue-900">
@@ -839,7 +869,7 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
                         {item.noBatch || '-'}
                       </td>
                       <td className="py-3 px-3 text-[11px] text-slate-600 dark:text-slate-400">
-                        {item.boxAwal || item.batchAwal || '-'} → {item.boxAkhir || item.batchAkhir || '-'}
+                        {item.boxAwal || item.batchAwal || '-'} - {item.boxAkhir || item.batchAkhir || '-'}
                       </td>
                       <td className="py-3 px-3 text-slate-500 text-[11px] font-sans">
                         {new Date(item.submittedAt).toLocaleDateString('id-ID', {
@@ -901,6 +931,8 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
           onClose={() => setBinManifestTarget(null)}
           binCode={binManifestTarget.binCode}
           records={binManifestTarget.records}
+          onProcessOutbound={onProcessOutbound}
+          onRestoreOutbound={onRestoreOutbound}
         />
       )}
 

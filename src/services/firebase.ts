@@ -149,6 +149,56 @@ export async function deletePalletRecord(recordId: string): Promise<void> {
 }
 
 /**
+ * Process outbound pallets (Pengambilan Produk)
+ * Sets status: 'OUT', tujuanPengambilan, tanggalPengambilan
+ */
+export async function updatePalletsOutbound(
+  palletIds: string[],
+  tujuan: string,
+  petugas?: string
+): Promise<void> {
+  if (palletIds.length === 0) return;
+  try {
+    const batch = writeBatch(db);
+    const nowIso = new Date().toISOString();
+    palletIds.forEach((id) => {
+      const ref = doc(db, PALLET_COLLECTION, id);
+      batch.update(ref, {
+        status: 'OUT',
+        tujuanPengambilan: tujuan,
+        tanggalPengambilan: nowIso,
+        petugasPengambilan: petugas || 'Petugas Lapangan'
+      });
+    });
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, PALLET_COLLECTION);
+  }
+}
+
+/**
+ * Restore taken pallets back into Bin (Batalkan Outbound)
+ */
+export async function restorePalletsToBin(palletIds: string[]): Promise<void> {
+  if (palletIds.length === 0) return;
+  try {
+    const batch = writeBatch(db);
+    palletIds.forEach((id) => {
+      const ref = doc(db, PALLET_COLLECTION, id);
+      batch.update(ref, {
+        status: 'IN',
+        tujuanPengambilan: null,
+        tanggalPengambilan: null,
+        petugasPengambilan: null
+      });
+    });
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, PALLET_COLLECTION);
+  }
+}
+
+/**
  * Clear all pallet records from Firestore
  */
 export async function clearAllPalletRecords(): Promise<void> {

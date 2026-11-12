@@ -396,15 +396,40 @@ export async function generateBinManifestPdfDoc(
   const margin = 8;
   const contentWidth = pageWidth - margin * 2; // 194mm
 
-  // Sort: newest input at No. 1, earliest input at the bottom (slot 8)
-  const sortedRecords = sortBinRecordsByLoadingOrder(records);
+  // Separate active records from picked (OUT) records
+  const activeRecords: PalletRecord[] = [];
+  const pickedRecords: PalletRecord[] = [];
 
-  // Extract unique item names
+  records.forEach((r) => {
+    if (r.status === 'OUT') {
+      pickedRecords.push(r);
+    } else {
+      activeRecords.push(r);
+    }
+  });
+
+  // Sort active records: newest input at No. 1, earliest input at the bottom (slot 8)
+  const sortedActiveRecords = sortBinRecordsByLoadingOrder(activeRecords);
+
+  // Picked records sorted newest pick first
+  pickedRecords.sort((a, b) => {
+    const timeA = a.tanggalPengambilan ? new Date(a.tanggalPengambilan).getTime() : 0;
+    const timeB = b.tanggalPengambilan ? new Date(b.tanggalPengambilan).getTime() : 0;
+    return timeB - timeA;
+  });
+
+  // Extract unique item names from active records (or fallback to all if empty)
   const dominantItemName =
-    Array.from(new Set(records.map((r) => r.namaBarang).filter(Boolean))).join(' / ') || '-';
+    Array.from(
+      new Set(
+        (activeRecords.length > 0 ? activeRecords : records)
+          .map((r) => r.namaBarang)
+          .filter(Boolean)
+      )
+    ).join(' / ') || '-';
 
-  const uniquePallets = new Set(records.map((r) => r.nomorPallet || r.id)).size;
-  const totalQty = records.reduce((sum, r) => sum + (Number(r.qtyPallet) || 0), 0);
+  const uniqueActivePallets = new Set(activeRecords.map((r) => r.nomorPallet || r.id)).size;
+  const totalActiveQty = activeRecords.reduce((sum, r) => sum + (Number(r.qtyPallet) || 0), 0);
 
   // 1. Header Box (40mm height, maximized clean white card with crisp border)
   const headerHeight = 40;
@@ -480,12 +505,18 @@ export async function generateBinManifestPdfDoc(
   doc.setTextColor(15, 23, 42);
   doc.setFontSize(9);
   doc.setFont('helvetica', 'bold');
-  doc.text(`Total Pallet: ${uniquePallets} Pallet`, margin + 5, currentY + 5.8);
-  doc.text(`Total Muatan: ${totalQty.toLocaleString('id-ID')} Box`, margin + 50, currentY + 5.8);
-  doc.text(`Jumlah Item: ${records.length} Baris`, margin + 104, currentY + 5.8);
-  doc.setFont('helvetica', 'normal');
-  doc.setTextColor(71, 85, 105);
-  doc.text(`Waktu Cetak: ${new Date().toLocaleString('id-ID')}`, margin + 144, currentY + 5.8);
+  doc.text(`Total Pallet: ${uniqueActivePallets} Pallet`, margin + 5, currentY + 5.8);
+  doc.text(`Total Muatan: ${totalActiveQty.toLocaleString('id-ID')} Box`, margin + 46, currentY + 5.8);
+  doc.text(`Item Aktif: ${sortedActiveRecords.length} Baris`, margin + 98, currentY + 5.8);
+
+  if (pickedRecords.length > 0) {
+    doc.setTextColor(180, 83, 9); // amber-700
+    doc.text(`Diambil: ${pickedRecords.length} Pallet`, margin + 138, currentY + 5.8);
+  } else {
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(71, 85, 105);
+    doc.text(`Waktu Cetak: ${new Date().toLocaleString('id-ID')}`, margin + 138, currentY + 5.8);
+  }
 
   currentY += metricsHeight + 3;
 
@@ -533,16 +564,20 @@ export async function generateBinManifestPdfDoc(
   doc.setFontSize(8.5);
   const rowHeight = 8;
 
-  if (sortedRecords.length === 0) {
+  if (sortedActiveRecords.length === 0) {
     doc.setFillColor(255, 255, 255);
     doc.rect(margin, currentY, contentWidth, 12, 'F');
     doc.setDrawColor(226, 232, 240);
     doc.rect(margin, currentY, contentWidth, 12, 'S');
     doc.setTextColor(100, 116, 139);
-    doc.text(`Belum ada muatan pallet tersimpan di Bin ${binCode}`, margin + 60, currentY + 7.5);
+    doc.text(
+      `Semua pallet di Bin ${binCode} telah selesai diambil (Outbound).`,
+      margin + 45,
+      currentY + 7.5
+    );
     currentY += 12;
   } else {
-    sortedRecords.forEach((r, i) => {
+    sortedActiveRecords.forEach((r, i) => {
       // In case of extra items, add page
       if (currentY > 275) {
         doc.addPage('a4', 'portrait');
@@ -608,6 +643,144 @@ export async function generateBinManifestPdfDoc(
       doc.text(boxRangeText, 179, currentY + 5.3, { align: 'center' });
 
       currentY += rowHeight;
+    });
+  }
+
+  // 5. RIWAYAT PALLET YANG TELAH DIAMBIL (OUTBOUND)
+  if (pickedRecords.length > 0) {
+    currentY += 4;
+
+    // Check page overflow
+    if (currentY > 250) {
+      doc.addPage('a4', 'portrait');
+      currentY = margin + 4;
+    }
+
+    // Section Header Banner
+    const historyHeaderHeight = 7.5;
+    doc.setFillColor(241, 245, 249); // slate-100
+    doc.setDrawColor(15, 23, 42);
+    doc.setLineWidth(0.5);
+    doc.rect(margin, currentY, contentWidth, historyHeaderHeight, 'FD');
+
+    doc.setTextColor(15, 23, 42);
+    doc.setFontSize(8.5);
+    doc.setFont('helvetica', 'bold');
+    doc.text(
+      `RIWAYAT PALLET YANG DIAMBIL DARI BIN ${binCode.toUpperCase()} (${pickedRecords.length} PALLET)`,
+      margin + 4,
+      currentY + 5.2
+    );
+
+    currentY += historyHeaderHeight;
+
+    // Table Header for Taken Items
+    const thHistHeight = 7;
+    doc.setFillColor(248, 250, 252);
+    doc.setDrawColor(15, 23, 42);
+    doc.setLineWidth(0.4);
+    doc.rect(margin, currentY, contentWidth, thHistHeight, 'FD');
+
+    // Dividers: Margin: 8 -> 202 (Width 194)
+    const histDividers = [16, 34, 72, 116, 130, 156, 178];
+    doc.setDrawColor(203, 213, 225);
+    doc.setLineWidth(0.3);
+    histDividers.forEach((x) => {
+      doc.line(x, currentY, x, currentY + thHistHeight);
+    });
+
+    doc.setTextColor(51, 65, 85);
+    doc.setFontSize(7.5);
+    doc.setFont('helvetica', 'bold');
+    doc.text('No', 12, currentY + 4.8, { align: 'center' });
+    doc.text('No Pallet', 18, currentY + 4.8);
+    doc.text('Kode Item', 36, currentY + 4.8);
+    doc.text('Nama Barang', 74, currentY + 4.8);
+    doc.text('Qty', 119, currentY + 4.8);
+    doc.text('Batch / Box', 132, currentY + 4.8);
+    doc.text('Tujuan', 158, currentY + 4.8);
+    doc.text('Tgl Pengambilan', 180, currentY + 4.8);
+
+    currentY += thHistHeight;
+
+    // Rows of Taken Pallets
+    const histRowHeight = 6.5;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.5);
+
+    pickedRecords.forEach((r, i) => {
+      if (currentY > 278) {
+        doc.addPage('a4', 'portrait');
+        currentY = margin + 4;
+      }
+
+      const rowBg = i % 2 === 0 ? 255 : 250;
+      doc.setFillColor(rowBg, rowBg, rowBg);
+      doc.rect(margin, currentY, contentWidth, histRowHeight, 'F');
+      doc.setDrawColor(226, 232, 240);
+      doc.rect(margin, currentY, contentWidth, histRowHeight, 'S');
+
+      doc.setDrawColor(226, 232, 240);
+      doc.setLineWidth(0.3);
+      histDividers.forEach((x) => {
+        doc.line(x, currentY, x, currentY + histRowHeight);
+      });
+
+      // No
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(100, 116, 139);
+      doc.text(String(i + 1), 12, currentY + 4.5, { align: 'center' });
+
+      // No Pallet
+      doc.setTextColor(15, 23, 42);
+      doc.text(r.nomorPallet || '-', 18, currentY + 4.5);
+
+      // Kode Item
+      doc.setTextColor(29, 78, 216);
+      doc.text(r.kodeItem || '-', 36, currentY + 4.5);
+
+      // Nama Barang
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(15, 23, 42);
+      const name = r.namaBarang.length > 24 ? r.namaBarang.substring(0, 22) + '...' : r.namaBarang;
+      doc.text(name, 74, currentY + 4.5);
+
+      // Qty
+      doc.setFont('helvetica', 'bold');
+      doc.text(`${r.qtyPallet} ${r.unit}`, 119, currentY + 4.5);
+
+      // Batch & Box
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(71, 85, 105);
+      const boxStr =
+        r.boxAwal || r.batchAwal ? ` (${r.boxAwal || r.batchAwal}-${r.boxAkhir || r.batchAkhir})` : '';
+      doc.text(`${r.noBatch || '-'}${boxStr}`, 132, currentY + 4.5);
+
+      // Tujuan
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(5, 150, 105); // emerald-600
+      doc.text(r.tujuanPengambilan || '-', 158, currentY + 4.5);
+
+      // Tanggal Pengambilan
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(71, 85, 105);
+      let dateDisplay = '-';
+      if (r.tanggalPengambilan) {
+        try {
+          const d = new Date(r.tanggalPengambilan);
+          dateDisplay = `${d.getDate().toString().padStart(2, '0')}/${(d.getMonth() + 1)
+            .toString()
+            .padStart(2, '0')} ${d.getHours().toString().padStart(2, '0')}:${d
+            .getMinutes()
+            .toString()
+            .padStart(2, '0')}`;
+        } catch {
+          dateDisplay = r.tanggalPengambilan;
+        }
+      }
+      doc.text(dateDisplay, 180, currentY + 4.5);
+
+      currentY += histRowHeight;
     });
   }
 

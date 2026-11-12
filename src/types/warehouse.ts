@@ -40,7 +40,21 @@ export interface PalletRecord {
   lokasiBin: string; // 1x input applied to all rows in pallet
   keterangan?: string;
   submittedAt: string;
+  // Outbound / Pengambilan Produk tracking
+  status?: 'IN' | 'OUT'; // Defaults to 'IN'
+  tujuanPengambilan?: string; // 'SJA Sepanjang' | 'SJA Karawang' | 'SJA Sukodono' | 'SJA Semarang'
+  tanggalPengambilan?: string; // ISO string / formatted date timestamp
+  petugasPengambilan?: string;
 }
+
+export const OUTBOUND_DESTINATIONS = [
+  'SJA Sepanjang',
+  'SJA Karawang',
+  'SJA Sukodono',
+  'SJA Semarang'
+] as const;
+
+export type OutboundDestination = typeof OUTBOUND_DESTINATIONS[number];
 
 export interface BatchSubmission {
   batchId: string;

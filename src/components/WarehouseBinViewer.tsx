@@ -26,11 +26,15 @@ export const WarehouseBinViewer: React.FC<WarehouseBinViewerProps> = ({
     return map;
   }, [records]);
 
-  // Count occupied slots
-  const occupiedA = GUDANG5_SLOTS_A.filter((slot) => (binMap.get(slot)?.length || 0) > 0).length;
-  const occupiedB = GUDANG5_SLOTS_B.filter((slot) => (binMap.get(slot)?.length || 0) > 0).length;
+  // Count occupied slots with active (unpicked) pallets
+  const occupiedA = GUDANG5_SLOTS_A.filter(
+    (slot) => (binMap.get(slot)?.filter((r) => r.status !== 'OUT').length || 0) > 0
+  ).length;
+  const occupiedB = GUDANG5_SLOTS_B.filter(
+    (slot) => (binMap.get(slot)?.filter((r) => r.status !== 'OUT').length || 0) > 0
+  ).length;
   const occupiedBPrimary = ['5B.1', '5B.2', '5B.3', '5B.4', '5B.5', '5B.6'].filter(
-    (slot) => (binMap.get(slot)?.length || 0) > 0
+    (slot) => (binMap.get(slot)?.filter((r) => r.status !== 'OUT').length || 0) > 0
   ).length;
 
   const [rangeFilter, setRangeFilter] = useState<string>('all');
@@ -163,11 +167,13 @@ export const WarehouseBinViewer: React.FC<WarehouseBinViewerProps> = ({
                 : null;
 
             const itemsA = binMap.get(slotA) || [];
-            const isFilledA = itemsA.length > 0;
+            const activeA = itemsA.filter((r) => r.status !== 'OUT');
+            const isFilledA = activeA.length > 0;
             const isSelectedA = selectedBin === slotA;
 
             const itemsB = slotB ? binMap.get(slotB) || [] : [];
-            const isFilledB = itemsB.length > 0;
+            const activeB = itemsB.filter((r) => r.status !== 'OUT');
+            const isFilledB = activeB.length > 0;
             const isSelectedB = selectedBin === slotB;
 
             return (
@@ -183,6 +189,8 @@ export const WarehouseBinViewer: React.FC<WarehouseBinViewerProps> = ({
                       ? 'ring-2 ring-blue-500 border-blue-500 bg-blue-50 dark:bg-blue-950/60'
                       : isFilledA
                       ? 'bg-emerald-50/90 dark:bg-emerald-950/40 border-emerald-300 dark:border-emerald-800 hover:border-emerald-400'
+                      : itemsA.length > 0
+                      ? 'bg-amber-50/50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-900/40'
                       : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700'
                   }`}
                 >
@@ -192,7 +200,11 @@ export const WarehouseBinViewer: React.FC<WarehouseBinViewerProps> = ({
                     </span>
                     {isFilledA ? (
                       <span className="text-[10px] font-bold text-emerald-800 dark:text-emerald-300 bg-emerald-100 dark:bg-emerald-900/60 px-2 py-0.5 rounded flex items-center gap-1">
-                        <Box className="w-3 h-3" /> {itemsA.length} Item
+                        <Box className="w-3 h-3" /> {activeA.length} Pallet Sisa
+                      </span>
+                    ) : itemsA.length > 0 ? (
+                      <span className="text-[10px] font-bold text-amber-700 dark:text-amber-400 bg-amber-100 dark:bg-amber-950 px-2 py-0.5 rounded">
+                        Semua Diambil
                       </span>
                     ) : (
                       <span className="text-[10px] text-slate-400">Slot Kosong</span>
@@ -203,14 +215,14 @@ export const WarehouseBinViewer: React.FC<WarehouseBinViewerProps> = ({
                     <div className="mt-1.5 pt-1.5 border-t border-emerald-200/60 dark:border-emerald-900 text-[11px]">
                       <div className="flex items-center gap-1.5">
                         <span className="font-mono font-bold text-amber-800 dark:text-amber-300 bg-amber-100 dark:bg-amber-950 px-1.5 py-0.2 rounded text-[10px]">
-                          {itemsA[0].nomorPallet}
+                          {activeA[0].nomorPallet}
                         </span>
                         <span className="font-medium text-slate-800 dark:text-slate-200 truncate">
-                          {itemsA[0].namaBarang}
+                          {activeA[0].namaBarang}
                         </span>
                       </div>
                       <div className="text-[10px] text-slate-500 font-mono mt-0.5">
-                        Qty: {itemsA.reduce((sum, r) => sum + (Number(r.qtyPallet) || 0), 0)} Box
+                        Sisa: {activeA.reduce((sum, r) => sum + (Number(r.qtyPallet) || 0), 0)} Box
                       </div>
                     </div>
                   ) : (
@@ -239,6 +251,8 @@ export const WarehouseBinViewer: React.FC<WarehouseBinViewerProps> = ({
                         ? 'ring-2 ring-blue-500 border-blue-500 bg-blue-50 dark:bg-blue-950/60'
                         : isFilledB
                         ? 'bg-emerald-50/90 dark:bg-emerald-950/40 border-emerald-300 dark:border-emerald-800 hover:border-emerald-400'
+                        : itemsB.length > 0
+                        ? 'bg-amber-50/50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-900/40'
                         : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700'
                     }`}
                   >
@@ -255,7 +269,11 @@ export const WarehouseBinViewer: React.FC<WarehouseBinViewerProps> = ({
                       </div>
                       {isFilledB ? (
                         <span className="text-[10px] font-bold text-emerald-800 dark:text-emerald-300 bg-emerald-100 dark:bg-emerald-900/60 px-2 py-0.5 rounded flex items-center gap-1">
-                          <Box className="w-3 h-3" /> {itemsB.length} Item
+                          <Box className="w-3 h-3" /> {activeB.length} Pallet Sisa
+                        </span>
+                      ) : itemsB.length > 0 ? (
+                        <span className="text-[10px] font-bold text-amber-700 dark:text-amber-400 bg-amber-100 dark:bg-amber-950 px-2 py-0.5 rounded">
+                          Semua Diambil
                         </span>
                       ) : (
                         <span className="text-[10px] text-slate-400">Slot Kosong</span>
@@ -266,14 +284,14 @@ export const WarehouseBinViewer: React.FC<WarehouseBinViewerProps> = ({
                       <div className="mt-1.5 pt-1.5 border-t border-emerald-200/60 dark:border-emerald-900 text-[11px]">
                         <div className="flex items-center gap-1.5">
                           <span className="font-mono font-bold text-amber-800 dark:text-amber-300 bg-amber-100 dark:bg-amber-950 px-1.5 py-0.2 rounded text-[10px]">
-                            {itemsB[0].nomorPallet}
+                            {activeB[0].nomorPallet}
                           </span>
                           <span className="font-medium text-slate-800 dark:text-slate-200 truncate">
-                            {itemsB[0].namaBarang}
+                            {activeB[0].namaBarang}
                           </span>
                         </div>
                         <div className="text-[10px] text-slate-500 font-mono mt-0.5">
-                          Qty: {itemsB.reduce((sum, r) => sum + (Number(r.qtyPallet) || 0), 0)} Box
+                          Sisa: {activeB.reduce((sum, r) => sum + (Number(r.qtyPallet) || 0), 0)} Box
                         </div>
                       </div>
                     ) : (
@@ -337,9 +355,22 @@ export const WarehouseBinViewer: React.FC<WarehouseBinViewerProps> = ({
                   className="p-3 bg-white dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-800 text-xs"
                 >
                   <div className="flex items-center justify-between mb-1">
-                    <span className="text-[10px] font-mono font-bold bg-amber-100 dark:bg-amber-950 text-amber-900 dark:text-amber-200 px-1.5 py-0.5 rounded border border-amber-300 dark:border-amber-900">
-                      {item.nomorPallet}
-                    </span>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span
+                        className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded border ${
+                          item.status === 'OUT'
+                            ? 'bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400 line-through border-slate-300 dark:border-slate-700'
+                            : 'bg-amber-100 dark:bg-amber-950 text-amber-900 dark:text-amber-200 border-amber-300 dark:border-amber-900'
+                        }`}
+                      >
+                        {item.nomorPallet}
+                      </span>
+                      {item.status === 'OUT' && (
+                        <span className="text-[9px] font-sans font-bold px-1.5 py-0.2 bg-amber-100 text-amber-800 rounded border border-amber-300">
+                          OUT: {item.tujuanPengambilan || 'Diambil'}
+                        </span>
+                      )}
+                    </div>
                     <span className="font-mono text-blue-600 font-bold text-[11px]">
                       {item.kodeItem}
                     </span>
