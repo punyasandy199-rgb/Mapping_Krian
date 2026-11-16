@@ -58,6 +58,30 @@ export interface WarehouseUser {
   status: 'Aktif' | 'Nonaktif';
 }
 
+// Master Gudang & Sub-Location (User Management -> Tab Gudang)
+export type WarehouseLocationGroup = 'SJA 3' | 'Gd. 137' | 'Gd. KRIAN';
+
+export const WAREHOUSE_LOCATION_GROUPS: WarehouseLocationGroup[] = [
+  'SJA 3',
+  'Gd. 137',
+  'Gd. KRIAN'
+];
+
+export interface MasterWarehouse {
+  id: string;
+  locationGroup: WarehouseLocationGroup;
+  kodeGudang: string; // e.g. 'GD-05', 'GD-06'
+  namaGudang: string; // Sub Location, e.g. 'Gudang 05', 'Gudang 06'
+  subtitle?: string;
+  status: 'ACTIVE' | 'MAINTENANCE';
+  rackLeftPrefix?: string; // e.g. '5A', '6A'
+  rackRightPrefix?: string; // e.g. '5B', '6B'
+  leftSlotCount?: number; // default 50
+  rightSlotCount?: number; // default 50
+  rightPrimaryCount?: number; // default 6
+  keterangan?: string;
+}
+
 export interface SuratJalanItemLine {
   kodeItem: string;
   namaBarang: string;
@@ -149,6 +173,8 @@ export interface PalletRecord {
   lokasiBin: string; // 1x input applied to all rows in pallet
   keterangan?: string;
   submittedAt: string;
+  updatedAt?: string; // Timestamp terakhir kali data pallet ini diupdate
+  lastUpdateAction?: string; // Keterangan aksi update terakhir (Edit Data, Outbound, Re-order, dll)
   // Outbound / Pengambilan Produk tracking
   status?: 'IN' | 'OUT'; // Defaults to 'IN'
   tujuanPengambilan?: string; // 'SJA Sepanjang' | 'SJA Karawang' | 'SJA Sukodono' | 'SJA Semarang'
@@ -406,5 +432,92 @@ export const DEFAULT_WAREHOUSE_USERS: WarehouseUser[] = [
     status: 'Aktif'
   }
 ];
+
+// Master Database Gudang & Sub-Location
+export const DEFAULT_MASTER_WAREHOUSES: MasterWarehouse[] = [
+  {
+    id: 'wh-krian-05',
+    locationGroup: 'Gd. KRIAN',
+    kodeGudang: 'GD-05',
+    namaGudang: 'Gudang 05',
+    subtitle: 'Denah Rak 5A & 5B · Area Utama Krian',
+    status: 'ACTIVE',
+    rackLeftPrefix: '5A',
+    rackRightPrefix: '5B',
+    leftSlotCount: 50,
+    rightSlotCount: 50,
+    rightPrimaryCount: 6,
+    keterangan: 'Denah Gudang 5 (50 Slot 5A & 5B)'
+  },
+  {
+    id: 'wh-krian-06',
+    locationGroup: 'Gd. KRIAN',
+    kodeGudang: 'GD-06',
+    namaGudang: 'Gudang 06',
+    subtitle: 'Peta Rak 6A & 6B · Area Gudang 6 Krian',
+    status: 'ACTIVE',
+    rackLeftPrefix: '6A',
+    rackRightPrefix: '6B',
+    leftSlotCount: 50,
+    rightSlotCount: 50,
+    rightPrimaryCount: 6,
+    keterangan: 'Peta Gudang 6 (50 Slot 6A & 6B)'
+  }
+];
+
+export interface WarehouseRackConfig {
+  leftPrefix: string;
+  rightPrefix: string;
+  leftCount: number;
+  rightCount: number;
+  primaryCount: number;
+  slotsA: string[];
+  slotsB: string[];
+  slotsBPrimary: string[];
+  allSlots: string[];
+}
+
+export function getWarehouseRackSlots(warehouse?: MasterWarehouse | null): WarehouseRackConfig {
+  const leftPrefix = (warehouse?.rackLeftPrefix || '5A').trim().toUpperCase();
+  const rightPrefix = (warehouse?.rackRightPrefix || '5B').trim().toUpperCase();
+  const leftCount = Math.max(1, Math.min(200, Number(warehouse?.leftSlotCount) || 50));
+  const rightCount = Math.max(1, Math.min(200, Number(warehouse?.rightSlotCount) || 50));
+  const primaryCount = Math.max(1, Math.min(rightCount, Number(warehouse?.rightPrimaryCount) || 6));
+
+  const slotsA = Array.from({ length: leftCount }, (_, i) => `${leftPrefix}.${i + 1}`);
+  const slotsB = Array.from({ length: rightCount }, (_, i) => `${rightPrefix}.${i + 1}`);
+  const slotsBPrimary = slotsB.slice(0, primaryCount);
+
+  return {
+    leftPrefix,
+    rightPrefix,
+    leftCount,
+    rightCount,
+    primaryCount,
+    slotsA,
+    slotsB,
+    slotsBPrimary,
+    allSlots: [...slotsA, ...slotsB]
+  };
+}
+
+export function resolveWarehouseForBin(
+  binCode: string,
+  warehouses: MasterWarehouse[],
+  fallback?: MasterWarehouse | null
+): MasterWarehouse | null {
+  const upperBin = (binCode || '').trim().toUpperCase();
+  const prefix = upperBin.split('.')[0];
+  if (prefix) {
+    const matched = warehouses.find((w) => {
+      const l = (w.rackLeftPrefix || '').trim().toUpperCase();
+      const r = (w.rackRightPrefix || '').trim().toUpperCase();
+      return l === prefix || r === prefix;
+    });
+    if (matched) return matched;
+  }
+  return fallback || warehouses[0] || DEFAULT_MASTER_WAREHOUSES[0];
+}
+
 
 

@@ -181,9 +181,14 @@ export async function updatePalletsBinOrder(
   if (!updates || updates.length === 0) return;
   try {
     const batch = writeBatch(db);
+    const nowIso = new Date().toISOString();
     updates.forEach(({ id, binOrder }) => {
       const ref = doc(db, PALLET_COLLECTION, id);
-      batch.update(ref, { binOrder });
+      batch.update(ref, {
+        binOrder,
+        updatedAt: nowIso,
+        lastUpdateAction: 'Urutan Rak Bin'
+      });
     });
     await batch.commit();
   } catch (error) {
@@ -221,7 +226,9 @@ export async function updatePalletsOutbound(
         status: 'OUT',
         tujuanPengambilan: tujuan,
         tanggalPengambilan: nowIso,
-        petugasPengambilan: petugas || 'Petugas Lapangan'
+        petugasPengambilan: petugas || 'Petugas Lapangan',
+        updatedAt: nowIso,
+        lastUpdateAction: `Outbound (${tujuan})`
       });
     });
     await batch.commit();
@@ -237,13 +244,16 @@ export async function restorePalletsToBin(palletIds: string[]): Promise<void> {
   if (palletIds.length === 0) return;
   try {
     const batch = writeBatch(db);
+    const nowIso = new Date().toISOString();
     palletIds.forEach((id) => {
       const ref = doc(db, PALLET_COLLECTION, id);
       batch.update(ref, {
         status: 'IN',
         tujuanPengambilan: null,
         tanggalPengambilan: null,
-        petugasPengambilan: null
+        petugasPengambilan: null,
+        updatedAt: nowIso,
+        lastUpdateAction: 'Kembalikan ke Bin'
       });
     });
     await batch.commit();
@@ -688,5 +698,55 @@ export async function deleteWarehouseUser(userId: string): Promise<void> {
     handleFirestoreError(error, OperationType.DELETE, `${USERS_COLLECTION}/${userId}`);
   }
 }
+
+// -------------------------------------------------------------
+// MASTER WAREHOUSES (GUDANG & SUB-LOCATION)
+// -------------------------------------------------------------
+const WAREHOUSES_COLLECTION = 'master_warehouses';
+
+export function subscribeToMasterWarehouses(
+  onUpdate: (warehouses: import('../types/warehouse').MasterWarehouse[]) => void
+): () => void {
+  const q = query(collection(db, WAREHOUSES_COLLECTION));
+  const unsubscribe = onSnapshot(
+    q,
+    (snapshot) => {
+      const items: import('../types/warehouse').MasterWarehouse[] = [];
+      snapshot.forEach((docSnap) => {
+        const raw = docSnap.data() as import('../types/warehouse').MasterWarehouse;
+        if (raw) {
+          items.push({ ...raw, id: raw.id || docSnap.id });
+        }
+      });
+      if (items.length > 0) {
+        onUpdate(items);
+      }
+    },
+    (error) => {
+      console.error('Snapshot error for master_warehouses:', error);
+      handleFirestoreError(error, OperationType.LIST, WAREHOUSES_COLLECTION);
+    }
+  );
+  return unsubscribe;
+}
+
+export async function saveMasterWarehouse(
+  warehouse: import('../types/warehouse').MasterWarehouse
+): Promise<void> {
+  try {
+    await setDoc(doc(db, WAREHOUSES_COLLECTION, warehouse.id), sanitizeForFirestore(warehouse));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `${WAREHOUSES_COLLECTION}/${warehouse.id}`);
+  }
+}
+
+export async function deleteMasterWarehouse(warehouseId: string): Promise<void> {
+  try {
+    await deleteDoc(doc(db, WAREHOUSES_COLLECTION, warehouseId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, `${WAREHOUSES_COLLECTION}/${warehouseId}`);
+  }
+}
+
 
 

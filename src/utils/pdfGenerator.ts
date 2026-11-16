@@ -422,7 +422,8 @@ async function renderSingleLabelOnDoc(doc: jsPDF, record: PalletRecord): Promise
  */
 export async function generateBinManifestPdfDoc(
   binCode: string,
-  records: PalletRecord[]
+  records: PalletRecord[],
+  warehouseLabel?: string
 ): Promise<jsPDF> {
   // A4 Portrait (210mm wide x 297mm tall)
   // Formatted so the manifest is placed strictly on the top 1/2 of the A4 page (~115-120mm height)
@@ -436,11 +437,19 @@ export async function generateBinManifestPdfDoc(
   const margin = 8;
   const contentWidth = pageWidth - margin * 2; // 194mm
 
+  const targetBin = (binCode || '').trim().toUpperCase();
+  const binOnlyRecords = records.filter(
+    (r) => (r.lokasiBin || '').trim().toUpperCase() === targetBin
+  );
+  const resolvedWhLabel =
+    warehouseLabel?.trim().toUpperCase() ||
+    (targetBin.startsWith('6') ? 'GUDANG 06' : 'GUDANG 05');
+
   // Separate active records from picked (OUT) records
   const activeRecords: PalletRecord[] = [];
   const pickedRecords: PalletRecord[] = [];
 
-  records.forEach((r) => {
+  binOnlyRecords.forEach((r) => {
     if (r.status === 'OUT') {
       pickedRecords.push(r);
     } else {
@@ -458,11 +467,11 @@ export async function generateBinManifestPdfDoc(
     return timeB - timeA;
   });
 
-  // Extract unique item names from active records (or fallback to all if empty)
+  // Extract unique item names from active records in this Bin (or fallback to all in this Bin)
   const dominantItemName =
     Array.from(
       new Set(
-        (activeRecords.length > 0 ? activeRecords : records)
+        (activeRecords.length > 0 ? activeRecords : binOnlyRecords)
           .map((r) => r.namaBarang)
           .filter(Boolean)
       )
@@ -478,7 +487,7 @@ export async function generateBinManifestPdfDoc(
   doc.setLineWidth(0.8);
   doc.roundedRect(margin, margin, contentWidth, headerHeight, 1.5, 1.5, 'FD');
 
-  // Top right: GUDANG 5 badge (large & bold)
+  // Top right: Warehouse badge (large & bold)
   const badgeWidth = 32;
   const badgeX = pageWidth - margin - badgeWidth - 3; // 210 - 8 - 32 - 3 = 167
   doc.setFillColor(248, 250, 252);
@@ -488,7 +497,7 @@ export async function generateBinManifestPdfDoc(
   doc.setTextColor(15, 23, 42);
   doc.setFontSize(10);
   doc.setFont('helvetica', 'bold');
-  doc.text('GUDANG 5', badgeX + badgeWidth / 2, margin + 8.8, { align: 'center' });
+  doc.text(resolvedWhLabel, badgeX + badgeWidth / 2, margin + 8.8, { align: 'center' });
 
   // Large QR Code centered in its box (22mm x 22mm inside 32mm x 26mm box)
   const qrBoxWidth = 32;
@@ -847,9 +856,10 @@ export async function generateBinManifestPdfDoc(
 export async function downloadBinManifestPdf(
   binCode: string,
   records: PalletRecord[],
-  filename?: string
+  filename?: string,
+  warehouseLabel?: string
 ): Promise<void> {
-  const doc = await generateBinManifestPdfDoc(binCode, records);
+  const doc = await generateBinManifestPdfDoc(binCode, records, warehouseLabel);
   const outputName = filename || `Kartu_Muatan_Bin_${binCode.replace('.', '_')}.pdf`;
   doc.save(outputName);
 }
@@ -860,9 +870,10 @@ export async function downloadBinManifestPdf(
 export async function openBinManifestPdfInNewTab(
   binCode: string,
   records: PalletRecord[],
-  enableAutoPrint = false
+  enableAutoPrint = false,
+  warehouseLabel?: string
 ): Promise<string> {
-  const doc = await generateBinManifestPdfDoc(binCode, records);
+  const doc = await generateBinManifestPdfDoc(binCode, records, warehouseLabel);
   if (enableAutoPrint) {
     doc.autoPrint();
   }
@@ -877,6 +888,7 @@ export async function openBinManifestPdfInNewTab(
   document.body.removeChild(link);
   return blobUrl;
 }
+
 
 
 

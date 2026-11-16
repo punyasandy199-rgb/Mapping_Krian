@@ -27,6 +27,8 @@ interface PrintBinManifestModalProps {
   isOpen: boolean;
   onClose: () => void;
   binCode: string;
+  warehouseLabel?: string;
+  isolatedScanMode?: boolean;
   records: PalletRecord[];
   onReorderPallets?: (orderedRecords: PalletRecord[]) => Promise<void> | void;
   onProcessOutbound?: (palletIds: string[], destination: string, petugas?: string) => Promise<void> | void;
@@ -37,6 +39,8 @@ export const PrintBinManifestModal: React.FC<PrintBinManifestModalProps> = ({
   isOpen,
   onClose,
   binCode,
+  warehouseLabel,
+  isolatedScanMode = false,
   records,
   onReorderPallets,
   onProcessOutbound,
@@ -44,10 +48,18 @@ export const PrintBinManifestModal: React.FC<PrintBinManifestModalProps> = ({
 }) => {
   const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [printFallbackUrl, setPrintFallbackUrl] = useState<string | null>(null);
   const [draggedId, setDraggedId] = useState<string | null>(null);
   const [dragOverId, setDragOverId] = useState<string | null>(null);
   const [isReordering, setIsReordering] = useState(false);
+
+  const resolvedWarehouseLabel = useMemo(() => {
+    if (warehouseLabel && warehouseLabel.trim()) return warehouseLabel.trim().toUpperCase();
+    const upper = (binCode || '').trim().toUpperCase();
+    if (upper.startsWith('6')) return 'GUDANG 06';
+    return 'GUDANG 05';
+  }, [warehouseLabel, binCode]);
 
   useEffect(() => {
     return () => {
@@ -62,12 +74,19 @@ export const PrintBinManifestModal: React.FC<PrintBinManifestModalProps> = ({
   const [petugasName, setPetugasName] = useState('Petugas Lapangan');
   const [isSubmittingOutbound, setIsSubmittingOutbound] = useState(false);
 
-  // Split records into Active (Remaining in Bin) vs Picked (OUT)
+  // Strict Bin Isolation: ALWAYS filter records strictly to this binCode
+  const binOnlyRecords = useMemo(() => {
+    const targetBin = (binCode || '').trim().toUpperCase();
+    if (!targetBin) return [];
+    return records.filter((r) => (r.lokasiBin || '').trim().toUpperCase() === targetBin);
+  }, [records, binCode]);
+
+  // Split bin-only records into Active (Remaining in Bin) vs Picked (OUT)
   const { activeRecords, pickedRecords } = useMemo(() => {
     const active: PalletRecord[] = [];
     const picked: PalletRecord[] = [];
 
-    records.forEach((r) => {
+    binOnlyRecords.forEach((r) => {
       if (r.status === 'OUT') {
         picked.push(r);
       } else {
@@ -83,7 +102,7 @@ export const PrintBinManifestModal: React.FC<PrintBinManifestModalProps> = ({
     });
 
     return { activeRecords: active, pickedRecords: picked };
-  }, [records]);
+  }, [binOnlyRecords]);
 
   // Sorting rule for active records:
   // First item entered in this Bin is at the bottom; newly added pallets fill previous numbers (No. 1).
@@ -91,12 +110,12 @@ export const PrintBinManifestModal: React.FC<PrintBinManifestModalProps> = ({
     return sortBinRecordsByLoadingOrder(activeRecords);
   }, [activeRecords]);
 
-  // Dominant item name (from active items, or fallback to all)
+  // Dominant item name (from active items, or fallback to all in this bin)
   const dominantItemName = useMemo(() => {
-    const source = activeRecords.length > 0 ? activeRecords : records;
+    const source = activeRecords.length > 0 ? activeRecords : binOnlyRecords;
     const names = Array.from(new Set(source.map((r) => r.namaBarang).filter(Boolean)));
     return names.length > 0 ? names.join(' / ') : '-';
-  }, [activeRecords, records]);
+  }, [activeRecords, binOnlyRecords]);
 
   const uniqueActivePallets = new Set(activeRecords.map((r) => r.nomorPallet || r.id)).size;
   const totalActiveQty = activeRecords.reduce((sum, r) => sum + (Number(r.qtyPallet) || 0), 0);
@@ -150,12 +169,13 @@ export const PrintBinManifestModal: React.FC<PrintBinManifestModalProps> = ({
       setSuccessMessage(
         `${palletIdsArray.length} Pallet berhasil diproses OUT ke tujuan ${selectedDestination}!`
       );
+      setErrorMessage(null);
       setSelectedPalletIds(new Set());
       setIsPickingModalOpen(false);
       setTimeout(() => setSuccessMessage(null), 4500);
     } catch (err) {
       console.error('Failed to process outbound:', err);
-      alert('Gagal memproses pengambilan produk');
+      setErrorMessage('Gagal memproses pengambilan produk. Silakan coba lagi.');
     } finally {
       setIsSubmittingOutbound(false);
     }
@@ -179,7 +199,7 @@ export const PrintBinManifestModal: React.FC<PrintBinManifestModalProps> = ({
       try {
         setIsExportingPdf(true);
         if (printFallbackUrl) URL.revokeObjectURL(printFallbackUrl);
-        const url = await openBinManifestPdfInNewTab(binCode, records, true);
+        const url = await openBinManifestPdfInNewTab(binCode, binOnlyRecords, true, resolvedWarehouseLabel);
         setPrintFallbackUrl(url);
         setSuccessMessage(
           `Browser preview membatasi cetak langsung. Kartu Bin PDF siap cetak telah disiapkan!`
@@ -196,12 +216,12 @@ export const PrintBinManifestModal: React.FC<PrintBinManifestModalProps> = ({
   const handleDownloadPdf = async () => {
     try {
       setIsExportingPdf(true);
-      await downloadBinManifestPdf(binCode, records);
+      await downloadBinManifestPdf(binCode, binOnlyRecords, undefined, resolvedWarehouseLabel);
       setSuccessMessage(`Dokumen PDF Kartu Bin ${binCode} berhasil diunduh!`);
       setTimeout(() => setSuccessMessage(null), 3500);
     } catch (err) {
       console.error(err);
-      alert('Gagal mengunduh PDF');
+      setErrorMessage('Gagal mengunduh PDF Kartu Bin.');
     } finally {
       setIsExportingPdf(false);
     }
@@ -210,17 +230,17 @@ export const PrintBinManifestModal: React.FC<PrintBinManifestModalProps> = ({
   const handleOpenPdfInNewTab = async () => {
     try {
       setIsExportingPdf(true);
-      await openBinManifestPdfInNewTab(binCode, records);
+      await openBinManifestPdfInNewTab(binCode, binOnlyRecords, false, resolvedWarehouseLabel);
     } catch (err) {
       console.error(err);
-      alert('Gagal membuka PDF');
+      setErrorMessage('Gagal membuka PDF di tab baru.');
     } finally {
       setIsExportingPdf(false);
     }
   };
 
   const handleExportCsv = () => {
-    exportPalletsToCsv(records, `muatan_bin_${binCode.replace('.', '_')}`);
+    exportPalletsToCsv(binOnlyRecords, `muatan_bin_${binCode.replace('.', '_')}`);
   };
 
   const applyActiveReorder = async (fromIdx: number, toIdx: number) => {
@@ -269,9 +289,20 @@ export const PrintBinManifestModal: React.FC<PrintBinManifestModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-black/60 backdrop-blur-xs print:p-0 print:m-0 print:bg-white print:fixed print:inset-0 print:z-[99999] print:block">
-      <div className="bg-white dark:bg-slate-900 rounded-2xl max-w-4xl w-full border border-slate-200 dark:border-slate-800 shadow-2xl flex flex-col max-h-[92vh] overflow-hidden print:max-h-none print:shadow-none print:border-none print:w-full print:max-w-none print:rounded-none">
-        
+    <div
+      className={
+        isolatedScanMode
+          ? 'min-h-screen w-full bg-slate-100 dark:bg-slate-950 p-3 sm:p-5 print:p-0 print:bg-white'
+          : 'fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-black/60 backdrop-blur-xs print:p-0 print:m-0 print:bg-white print:fixed print:inset-0 print:z-[99999] print:block'
+      }
+    >
+      <div
+        className={
+          isolatedScanMode
+            ? 'bg-white dark:bg-slate-900 rounded-2xl max-w-5xl mx-auto w-full border border-slate-200 dark:border-slate-800 shadow-lg flex flex-col overflow-hidden print:shadow-none print:border-none print:w-full print:max-w-none print:rounded-none'
+            : 'bg-white dark:bg-slate-900 rounded-2xl max-w-4xl w-full border border-slate-200 dark:border-slate-800 shadow-2xl flex flex-col max-h-[92vh] overflow-hidden print:max-h-none print:shadow-none print:border-none print:w-full print:max-w-none print:rounded-none'
+        }
+      >
         {/* Modal Top Header (Interactive Navigation - hidden on print) */}
         <div className="flex items-center justify-between p-4 sm:p-5 border-b border-slate-200 dark:border-slate-800 print:hidden">
           <div className="flex items-center gap-2.5">
@@ -279,16 +310,18 @@ export const PrintBinManifestModal: React.FC<PrintBinManifestModalProps> = ({
               <Printer className="w-5 h-5" />
             </div>
             <div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <h3 className="text-base font-bold text-slate-900 dark:text-white">
-                  Lembar Muatan &amp; Pengambilan Bin: {binCode}
+                  {isolatedScanMode ? `Hasil Scan QR Bin: ${binCode}` : `Lembar Muatan & Pengambilan Bin: ${binCode}`}
                 </h3>
                 <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-blue-100 dark:bg-blue-950 text-blue-700 dark:text-blue-300 font-bold border border-blue-200 dark:border-blue-900">
-                  GUDANG 5
+                  {resolvedWarehouseLabel}
                 </span>
               </div>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                Petugas dapat mencentang pallet lalu klik &quot;Pengambilan Produk&quot; untuk proses OUT
+                {isolatedScanMode
+                  ? `Menampilkan khusus muatan pallet yang berada di Bin ${binCode}`
+                  : 'Petugas dapat mencentang pallet lalu klik "Pengambilan Produk" untuk proses OUT'}
               </p>
             </div>
           </div>
@@ -296,15 +329,27 @@ export const PrintBinManifestModal: React.FC<PrintBinManifestModalProps> = ({
           <button
             type="button"
             onClick={onClose}
-            className="p-1.5 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors cursor-pointer"
           >
-            <X className="w-5 h-5" />
+            {isolatedScanMode ? (
+              <span>Buka Portal Utama</span>
+            ) : (
+              <X className="w-5 h-5" />
+            )}
           </button>
         </div>
 
         {/* Modal Content - Document Preview & Interactive Picking Section */}
         <div className="p-4 sm:p-6 overflow-y-auto space-y-4 print:p-0 print:overflow-visible">
-          
+          {errorMessage && (
+            <div className="p-3 bg-red-50 dark:bg-red-950/40 border border-red-300 dark:border-red-800 text-red-800 dark:text-red-200 rounded-xl text-xs font-semibold flex items-center justify-between gap-2 print:hidden">
+              <span>{errorMessage}</span>
+              <button type="button" onClick={() => setErrorMessage(null)} className="text-xs font-bold underline">
+                Tutup
+              </button>
+            </div>
+          )}
+
           {/* Success Banner */}
           {successMessage && (
             <div className="p-3 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-300 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200 rounded-xl text-xs font-semibold flex items-center gap-2 print:hidden animate-fadeIn">
@@ -386,10 +431,10 @@ export const PrintBinManifestModal: React.FC<PrintBinManifestModalProps> = ({
                 </div>
               </div>
 
-              {/* Right Column: "Gudang 5" badge & Centered QR Code */}
+              {/* Right Column: Dynamic Warehouse badge & Centered QR Code */}
               <div className="shrink-0 flex flex-col items-center gap-2.5">
                 <div className="text-sm sm:text-base font-black uppercase tracking-wider bg-white border-2 border-slate-900 text-slate-950 px-4 py-1.5 rounded-lg shadow-xs text-center w-full">
-                  GUDANG 5
+                  {resolvedWarehouseLabel}
                 </div>
 
                 <div className="p-2.5 bg-white border border-slate-400 rounded-xl shadow-xs flex items-center justify-center">
@@ -488,7 +533,7 @@ export const PrintBinManifestModal: React.FC<PrintBinManifestModalProps> = ({
                         colSpan={onReorderPallets ? 9 : 8}
                         className="py-10 text-center text-slate-500 italic font-sans text-sm bg-slate-50"
                       >
-                        {records.length > 0 ? (
+                        {binOnlyRecords.length > 0 ? (
                           <div className="space-y-1">
                             <span className="font-bold text-amber-700 block">
                               Semua pallet di Bin {binCode} telah selesai diambil (Outbound).
@@ -801,7 +846,7 @@ export const PrintBinManifestModal: React.FC<PrintBinManifestModalProps> = ({
           <button
             type="button"
             onClick={handleExportCsv}
-            disabled={records.length === 0}
+            disabled={binOnlyRecords.length === 0}
             className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors disabled:opacity-50"
           >
             <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />

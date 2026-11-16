@@ -533,10 +533,15 @@ export const SuratJalanPrintModal: React.FC<SuratJalanPrintModalProps> = ({
       }
     });
 
-    // 7. SEPARATE PAGE: LIST ITEM / PALLET YANG DIAMBIL (Portrait 215x280, area atas 14 cm agar tidak terpotong garis sobek)
+    // 7. LANJUTAN LANGSUNG DI HALAMAN YANG SAMA: LIST ITEM / PALLET YANG DIAMBIL (1-2 spasi di bawah Distribusi)
     if (pickedRows.length > 0) {
-      doc.addPage([215, 280], 'portrait');
-      currentY = marginY;
+      const fullPageLimitY = 272;
+      currentY += 6; // 1-2 spasi di bawah Distribusi
+
+      if (currentY + 18 > fullPageLimitY) {
+        doc.addPage([215, 280], 'portrait');
+        currentY = marginY;
+      }
 
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(7.5);
@@ -571,7 +576,7 @@ export const SuratJalanPrintModal: React.FC<SuratJalanPrintModalProps> = ({
       pickedRows.forEach((row, idx) => {
         const lineCount = row.batchEntries.length > 1 ? row.batchEntries.length : 1;
         const rH = lineCount > 1 ? Math.max(5.2, lineCount * 3.6 + 1.6) : 5.2;
-        if (currentY + rH > halfSheetLimitY) {
+        if (currentY + rH > fullPageLimitY) {
           doc.addPage([215, 280], 'portrait');
           currentY = marginY;
           drawPickedHeader(currentY);
@@ -755,10 +760,6 @@ export const SuratJalanPrintModal: React.FC<SuratJalanPrintModalProps> = ({
           .sj-print-page-break {
             page-break-after: always !important;
             break-after: page !important;
-          }
-          .sj-print-page-before {
-            page-break-before: always !important;
-            break-before: page !important;
           }
           .no-print {
             display: none !important;
@@ -1122,9 +1123,9 @@ export const SuratJalanPrintModal: React.FC<SuratJalanPrintModalProps> = ({
                     </div>
                   </div>
 
-                  {/* 7. SEPARATE BOX: LIST ITEM / PALLET YANG DIAMBIL */}
+                  {/* 7. SAME-PAGE CONTINUATION: LIST ITEM / PALLET YANG DIAMBIL (1-2 SPASI DI BAWAH) */}
                   {pickedRows.length > 0 && (
-                    <div className="mt-7 pt-3 border-t border-dashed border-black sj-print-page-before print:mt-0 print:pt-0 print:border-t-0">
+                    <div className="mt-4 print:mt-3">
                       <div className="border border-black p-2 bg-white">
                         <div className="flex flex-wrap items-center justify-between gap-2 pb-1.5 mb-1.5 border-b border-black text-[10.5px] text-black">
                           <span className="font-bold uppercase">

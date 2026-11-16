@@ -118,30 +118,44 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
         {/* Search Results */}
         {hasSearched && (
           <div className="mt-4 flex-1 overflow-y-auto">
-            {/* If matches Bin: Show list of items in that Bin */}
+            {/* If matches Bin: Show ONLY pallets inside that Bin */}
             {foundBinItems && (
               <div className="p-4 rounded-xl bg-blue-50/70 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-900 text-xs space-y-3">
-                <div className="flex items-center justify-between">
+                <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2 text-blue-900 dark:text-blue-300 font-bold">
                     <MapPin className="w-4 h-4 text-blue-600" />
-                    <span>Daftar Muatan di Bin {foundBinItems.binCode}</span>
+                    <span>Khusus Muatan Bin {foundBinItems.binCode}</span>
                   </div>
-                  {onOpenBinDetail && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        onClose();
-                        onOpenBinDetail(foundBinItems.binCode);
-                      }}
-                      className="text-[11px] font-bold text-blue-600 dark:text-blue-400 hover:underline"
-                    >
-                      Buka Tampilan Penuh →
-                    </button>
-                  )}
+                  <div className="flex items-center gap-2">
+                    {onSelectBinManifest && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onClose();
+                          onSelectBinManifest(foundBinItems.binCode);
+                        }}
+                        className="px-2.5 py-1 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-[11px] font-bold transition-colors cursor-pointer"
+                      >
+                        Buka Lembar Bin →
+                      </button>
+                    )}
+                    {onOpenBinDetail && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onClose();
+                          onOpenBinDetail(foundBinItems.binCode);
+                        }}
+                        className="text-[11px] font-bold text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
+                      >
+                        Detail Bin
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 <div className="text-[11px] text-slate-600 dark:text-slate-400">
-                  Total {foundBinItems.items.length} item tersimpan di lokasi rak ini:
+                  Menampilkan <strong>{foundBinItems.items.length}</strong> pallet di Bin <strong>{foundBinItems.binCode}</strong> (pallet di Bin lain disembunyikan):
                 </div>
 
                 <div className="space-y-2 max-h-60 overflow-y-auto">
@@ -151,9 +165,16 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
                       className="p-2.5 bg-white dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-800"
                     >
                       <div className="flex items-center justify-between mb-1">
-                        <span className="font-mono font-bold bg-amber-100 dark:bg-amber-950 text-amber-900 dark:text-amber-200 px-1.5 py-0.5 rounded text-[10px]">
-                          {item.nomorPallet}
-                        </span>
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-mono font-bold bg-amber-100 dark:bg-amber-950 text-amber-900 dark:text-amber-200 px-1.5 py-0.5 rounded text-[10px]">
+                            {item.nomorPallet}
+                          </span>
+                          {item.status === 'OUT' && (
+                            <span className="font-bold bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400 px-1.5 py-0.5 rounded text-[10px]">
+                              OUT
+                            </span>
+                          )}
+                        </div>
                         <span className="font-mono text-blue-600 dark:text-blue-400 font-bold text-[11px]">
                           {item.kodeItem}
                         </span>
@@ -163,7 +184,7 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
                       </div>
                       <div className="flex items-center justify-between text-slate-500 font-mono text-[10px] mt-1">
                         <span>Qty: {item.qtyPallet} {item.unit}</span>
-                        <span>Batch: {item.batchAwal}-{item.batchAkhir}</span>
+                        <span>Batch: {item.noBatch || '-'} ({item.boxAwal || item.batchAwal || '-'}-{item.boxAkhir || item.batchAkhir || '-'})</span>
                       </div>
                     </div>
                   ))}

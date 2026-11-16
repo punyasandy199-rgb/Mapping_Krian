@@ -1,12 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   PalletRowInput,
-  PalletBatchEntry,
   MasterItem,
+  MasterWarehouse,
   COMMON_UNITS,
-  GUDANG5_SLOTS_A,
-  GUDANG5_SLOTS_B,
-  GUDANG5_SLOTS_B_PRIMARY
+  getWarehouseRackSlots
 } from '../types/warehouse';
 import { calculateBatchBoxCount } from '../utils/batchCalculator';
 import { QrCodeRenderer } from './QrCodeRenderer';
@@ -20,13 +18,14 @@ import {
   Layers,
   Database,
   QrCode,
-  Box,
   AlertCircle,
-  ChevronDown
+  ChevronDown,
+  MessageSquareWarning
 } from 'lucide-react';
 
 interface PalletInputFormProps {
   masterItems: MasterItem[];
+  activeWarehouse?: MasterWarehouse | null;
   onOpenMasterDatabase: () => void;
   onOpenBinDetail: (binCode: string) => void;
   onSubmit: (
@@ -40,7 +39,7 @@ const createEmptyRow = (index: number, inheritFrom?: PalletRowInput): PalletRowI
   nomorPallet: '', // Kondisikan saat awal selalu kosong
   kodeItem: inheritFrom?.kodeItem || '',
   namaBarang: inheritFrom?.namaBarang || '', // saat penambahan baris mengikuti history 1 item diatasnya
-  qtyPallet: inheritFrom ? inheritFrom.qtyPallet : '',
+  qtyPallet: '',
   unit: inheritFrom?.unit || 'Box', // default satuan ke 'Box'
   noBatch: inheritFrom?.noBatch || '', // mewarisi batch diatasnya jika ada
   boxAwal: '', // No. Box Awal kosong
@@ -48,17 +47,42 @@ const createEmptyRow = (index: number, inheritFrom?: PalletRowInput): PalletRowI
   batchAwal: '',
   batchAkhir: '',
   extraBatches: [],
-  keterangan: inheritFrom?.keterangan || ''
+  keterangan: ''
 });
+
+function computeCombinedBoxesFromRow(row: PalletRowInput): number | null {
+  const firstCalc = calculateBatchBoxCount(
+    row.boxAwal || row.batchAwal || '',
+    row.boxAkhir || row.batchAkhir || ''
+  );
+  const extraCalcs = (row.extraBatches || []).map((eb) =>
+    calculateBatchBoxCount(eb.boxAwal, eb.boxAkhir)
+  );
+  const allCalcs = [firstCalc, ...extraCalcs];
+  if (allCalcs.some((c) => c && !c.isValid)) {
+    return null;
+  }
+  const total = allCalcs.reduce((sum, c) => sum + (c && c.isValid ? c.totalBox : 0), 0);
+  return total > 0 ? total : null;
+}
 
 export const PalletInputForm: React.FC<PalletInputFormProps> = ({
   masterItems,
+  activeWarehouse,
   onOpenMasterDatabase,
   onOpenBinDetail,
   onSubmit
 }) => {
-  // Lokasi Bin diisi 1x saja di bagian atas (Gudang 5: 5A.1 dst)
-  const [lokasiBin, setLokasiBin] = useState('5A.1');
+  const rackConfig = useMemo(() => getWarehouseRackSlots(activeWarehouse), [activeWarehouse]);
+  const warehouseTitle = activeWarehouse?.namaGudang || 'Gudang 05';
+  const defaultBinCode = `${rackConfig.leftPrefix}.1`;
+
+  // Lokasi Bin diisi 1x saja di bagian atas (sesuai gudang aktif, mis. 5A.1 / 6A.1)
+  const [lokasiBin, setLokasiBin] = useState(defaultBinCode);
+
+  useEffect(() => {
+    setLokasiBin(`${rackConfig.leftPrefix}.1`);
+  }, [rackConfig.leftPrefix]);
 
   // Mulai dengan 1 baris input kosong (No Pallet selalu kosong)
   const [rows, setRows] = useState<PalletRowInput[]>([
@@ -99,6 +123,19 @@ export const PalletInputForm: React.FC<PalletInputFormProps> = ({
         if (field === 'boxAkhir') updated.batchAkhir = String(value);
         if (field === 'batchAwal') updated.boxAwal = String(value);
         if (field === 'batchAkhir') updated.boxAkhir = String(value);
+
+        // Jika mengubah rentang No. Box, otomatis sinkronkan qtyPallet ke jumlah box terinput
+        if (
+          field === 'boxAwal' ||
+          field === 'boxAkhir' ||
+          field === 'batchAwal' ||
+          field === 'batchAkhir'
+        ) {
+          const autoBoxes = computeCombinedBoxesFromRow(updated);
+          if (autoBoxes !== null) {
+            updated.qtyPallet = autoBoxes;
+          }
+        }
         return updated;
       })
     );
@@ -130,10 +167,15 @@ export const PalletInputForm: React.FC<PalletInputFormProps> = ({
       prev.map((row) => {
         if (row.id !== rowId) return row;
         const currentExtra = row.extraBatches || [];
-        return {
+        const updated: PalletRowInput = {
           ...row,
           extraBatches: currentExtra.filter((_, idx) => idx !== batchIndex)
         };
+        const autoBoxes = computeCombinedBoxesFromRow(updated);
+        if (autoBoxes !== null) {
+          updated.qtyPallet = autoBoxes;
+        }
+        return updated;
       })
     );
   };
@@ -151,7 +193,14 @@ export const PalletInputForm: React.FC<PalletInputFormProps> = ({
         const updatedExtra = currentExtra.map((eb, idx) =>
           idx === batchIndex ? { ...eb, [field]: value } : eb
         );
-        return { ...row, extraBatches: updatedExtra };
+        const updated: PalletRowInput = { ...row, extraBatches: updatedExtra };
+        if (field === 'boxAwal' || field === 'boxAkhir') {
+          const autoBoxes = computeCombinedBoxesFromRow(updated);
+          if (autoBoxes !== null) {
+            updated.qtyPallet = autoBoxes;
+          }
+        }
+        return updated;
       })
     );
     if (errors[rowId]) {
@@ -167,12 +216,14 @@ export const PalletInputForm: React.FC<PalletInputFormProps> = ({
     setRows((prev) =>
       prev.map((row) => {
         if (row.id !== rowId) return row;
+        const calculatedBoxes = computeCombinedBoxesFromRow(row);
         return {
           ...row,
           namaBarang: item.namaBarang,
           kodeItem: item.kodeItem,
           unit: item.satuan || 'Box',
-          qtyPallet: item.defaultQty || row.qtyPallet
+          // Jangan timpa qtyPallet dengan std 15; gunakan box terhitung bila ada atau biarkan sesuai input user
+          qtyPallet: calculatedBoxes ?? row.qtyPallet
         };
       })
     );
@@ -180,14 +231,14 @@ export const PalletInputForm: React.FC<PalletInputFormProps> = ({
   };
 
   const handleFillSample = () => {
-    setLokasiBin('5A.1');
+    setLokasiBin(defaultBinCode);
     const sampleItems = masterItems.slice(0, 3);
     const newRows: PalletRowInput[] = sampleItems.map((item, idx) => ({
       id: `row-sample-${idx}-${Date.now()}`,
       nomorPallet: `PLT-0${idx + 1}`,
       kodeItem: item.kodeItem,
       namaBarang: item.namaBarang,
-      qtyPallet: item.defaultQty || 50,
+      qtyPallet: 50,
       unit: item.satuan || 'Box',
       noBatch: `B26010${idx + 1}`,
       boxAwal: `001`,
@@ -195,7 +246,7 @@ export const PalletInputForm: React.FC<PalletInputFormProps> = ({
       batchAwal: `001`,
       batchAkhir: `050`,
       extraBatches: [],
-      keterangan: 'Pemeriksaan inbound OK'
+      keterangan: ''
     }));
     setRows(newRows);
     setErrors({});
@@ -203,7 +254,7 @@ export const PalletInputForm: React.FC<PalletInputFormProps> = ({
 
   const handleReset = () => {
     setRows([createEmptyRow(1)]);
-    setLokasiBin('5A.1');
+    setLokasiBin(defaultBinCode);
     setErrors({});
   };
 
@@ -256,9 +307,9 @@ export const PalletInputForm: React.FC<PalletInputFormProps> = ({
   const binScanUrl =
     typeof window !== 'undefined'
       ? `${window.location.origin}${window.location.pathname}?bin=${encodeURIComponent(
-          lokasiBin || '5A.1'
+          lokasiBin || defaultBinCode
         )}`
-      : `?bin=${lokasiBin || '5A.1'}`;
+      : `?bin=${lokasiBin || defaultBinCode}`;
 
   return (
     <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm p-5 md:p-7">
@@ -312,22 +363,22 @@ export const PalletInputForm: React.FC<PalletInputFormProps> = ({
       </div>
 
       <form onSubmit={validateAndSubmit} className="space-y-6 mt-5">
-        {/* SECTION 1: LOKASI BIN GUDANG 5 (DIISI 1X SAJA) & LIVE QR CODE DENGAN LINK LIST MUATAN */}
+        {/* SECTION 1: LOKASI BIN GUDANG AKTIF (DIISI 1X SAJA) & LIVE QR CODE */}
         <div className="bg-slate-50/90 dark:bg-slate-800/40 p-4 md:p-5 rounded-xl border border-slate-200 dark:border-slate-800">
-          <div className="flex items-center justify-between border-b border-slate-200/80 dark:border-slate-700/80 pb-2 mb-4">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200/80 dark:border-slate-700/80 pb-2 mb-4">
             <div className="flex items-center gap-2">
               <span className="text-xs font-bold uppercase tracking-wider text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
                 <MapPin className="w-4 h-4 text-blue-600" />
-                Lokasi Bin Gudang 5 (Diinput 1x Saja)
+                Lokasi Bin {warehouseTitle} (Diinput 1x Saja)
               </span>
             </div>
             <span className="text-[11px] text-slate-500 font-medium">
-              Sisi Kiri: 50 Slot (5A.1–5A.50) · Sisi Kanan: 50 Slot (6 Slot Utama: 5B.1–5B.6)
+              Sisi Kiri: {rackConfig.leftCount} Slot ({rackConfig.leftPrefix}.1–{rackConfig.leftPrefix}.{rackConfig.leftCount}) &middot; Sisi Kanan: {rackConfig.rightCount} Slot ({rackConfig.primaryCount} Utama: {rackConfig.rightPrefix}.1–{rackConfig.rightPrefix}.{rackConfig.primaryCount})
             </span>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-12 gap-5 items-center">
-            {/* Input Lokasi Bin & Quick Select (A & B hingga 50 slot, B 6 slot utama) */}
+            {/* Input Lokasi Bin & Quick Select */}
             <div className="md:col-span-8 space-y-3">
               <div>
                 <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
@@ -339,7 +390,7 @@ export const PalletInputForm: React.FC<PalletInputFormProps> = ({
                     required
                     value={lokasiBin}
                     onChange={(e) => setLokasiBin(e.target.value.toUpperCase())}
-                    placeholder="Contoh: 5A.1, 5A.25, 5B.6"
+                    placeholder={`Contoh: ${rackConfig.leftPrefix}.1, ${rackConfig.rightPrefix}.1`}
                     className={`max-w-xs w-full text-base font-mono font-extrabold text-blue-700 dark:text-blue-300 bg-white dark:bg-slate-900 border rounded-lg px-3.5 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 ${
                       errors['lokasiBin']
                         ? 'border-red-500'
@@ -354,13 +405,12 @@ export const PalletInputForm: React.FC<PalletInputFormProps> = ({
 
               {/* Quick Select Buttons */}
               <div className="space-y-2 pt-1">
-                {/* Sisi Kiri (5A) - 50 Slot */}
+                {/* Sisi Kiri */}
                 <div className="flex flex-wrap items-center gap-1.5 text-xs">
                   <span className="text-[10px] font-bold text-blue-700 dark:text-blue-300 bg-blue-100 dark:bg-blue-950 px-2 py-0.5 rounded">
-                    Kiri (5A.1–5A.50):
+                    Kiri ({rackConfig.leftPrefix}.1–{rackConfig.leftPrefix}.{rackConfig.leftCount}):
                   </span>
-                  {/* Quick chips for first 8 slots */}
-                  {GUDANG5_SLOTS_A.slice(0, 8).map((code) => (
+                  {rackConfig.slotsA.slice(0, 8).map((code) => (
                     <button
                       key={code}
                       type="button"
@@ -374,16 +424,15 @@ export const PalletInputForm: React.FC<PalletInputFormProps> = ({
                       {code}
                     </button>
                   ))}
-                  {/* Dropdown for all 50 slots in 5A */}
                   <select
-                    value={lokasiBin.startsWith('5A.') ? lokasiBin : ''}
+                    value={lokasiBin.startsWith(`${rackConfig.leftPrefix}.`) ? lokasiBin : ''}
                     onChange={(e) => {
                       if (e.target.value) setLokasiBin(e.target.value);
                     }}
                     className="text-xs font-mono bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded px-2 py-0.5 text-slate-700 dark:text-slate-300 focus:outline-none"
                   >
-                    <option value="">Pilih 5A (1-50)...</option>
-                    {GUDANG5_SLOTS_A.map((code) => (
+                    <option value="">Pilih {rackConfig.leftPrefix} (1-{rackConfig.leftCount})...</option>
+                    {rackConfig.slotsA.map((code) => (
                       <option key={code} value={code}>
                         Bin {code}
                       </option>
@@ -391,12 +440,12 @@ export const PalletInputForm: React.FC<PalletInputFormProps> = ({
                   </select>
                 </div>
 
-                {/* Sisi Kanan (5B) - 6 Slot Utama & hingga 50 */}
+                {/* Sisi Kanan */}
                 <div className="flex flex-wrap items-center gap-1.5 text-xs">
                   <span className="text-[10px] font-bold text-slate-800 dark:text-slate-200 bg-slate-200 dark:bg-slate-800 px-2 py-0.5 rounded">
-                    Kanan (5B - 6 Slot Utama):
+                    Kanan ({rackConfig.rightPrefix} - {rackConfig.primaryCount} Slot Utama):
                   </span>
-                  {GUDANG5_SLOTS_B_PRIMARY.map((code) => (
+                  {rackConfig.slotsBPrimary.map((code) => (
                     <button
                       key={code}
                       type="button"
@@ -410,16 +459,15 @@ export const PalletInputForm: React.FC<PalletInputFormProps> = ({
                       {code}
                     </button>
                   ))}
-                  {/* Dropdown for all 50 slots in 5B */}
                   <select
-                    value={lokasiBin.startsWith('5B.') ? lokasiBin : ''}
+                    value={lokasiBin.startsWith(`${rackConfig.rightPrefix}.`) ? lokasiBin : ''}
                     onChange={(e) => {
                       if (e.target.value) setLokasiBin(e.target.value);
                     }}
                     className="text-xs font-mono bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded px-2 py-0.5 text-slate-700 dark:text-slate-300 focus:outline-none"
                   >
-                    <option value="">Pilih 5B (1-50)...</option>
-                    {GUDANG5_SLOTS_B.map((code) => (
+                    <option value="">Pilih {rackConfig.rightPrefix} (1-{rackConfig.rightCount})...</option>
+                    {rackConfig.slotsB.map((code) => (
                       <option key={code} value={code}>
                         Bin {code}
                       </option>
@@ -429,21 +477,21 @@ export const PalletInputForm: React.FC<PalletInputFormProps> = ({
               </div>
             </div>
 
-            {/* LIVE QR CODE FOR BIN GUDANG (ENCODES LINK TO SHOW LIST DATA) */}
+            {/* LIVE QR CODE FOR BIN GUDANG */}
             <div className="md:col-span-4 flex flex-col items-center justify-center p-3.5 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-700 gap-2">
               <div className="text-center">
                 <div className="text-[11px] font-bold text-slate-700 dark:text-slate-300 flex items-center justify-center gap-1 uppercase tracking-wider">
-                  <QrCode className="w-3.5 h-3.5 text-blue-600" /> QR Code Bin Gudang
+                  <QrCode className="w-3.5 h-3.5 text-blue-600" /> QR Code Bin {warehouseTitle}
                 </div>
                 <div className="text-[10px] text-slate-400 mt-0.5">
-                  Scan kamera HP untuk buka list muatan
+                  Scan kamera HP untuk buka list muatan bin ini
                 </div>
               </div>
 
               <div
-                onClick={() => onOpenBinDetail(lokasiBin || '5A.1')}
+                onClick={() => onOpenBinDetail(lokasiBin || defaultBinCode)}
                 className="cursor-pointer group flex flex-col items-center hover:opacity-95 transition-opacity"
-                title={`Klik untuk lihat list data muatan di Bin ${lokasiBin || '5A.1'}`}
+                title={`Klik untuk lihat list data muatan di Bin ${lokasiBin || defaultBinCode}`}
               >
                 <QrCodeRenderer
                   value={binScanUrl}
@@ -455,7 +503,7 @@ export const PalletInputForm: React.FC<PalletInputFormProps> = ({
                   type="button"
                   onClick={(e) => {
                     e.stopPropagation();
-                    onOpenBinDetail(lokasiBin || '5A.1');
+                    onOpenBinDetail(lokasiBin || defaultBinCode);
                   }}
                   className="mt-1.5 text-[11px] font-bold text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1"
                 >
@@ -590,9 +638,6 @@ export const PalletInputForm: React.FC<PalletInputFormProps> = ({
                             if (matched) {
                               handleRowChange(row.id, 'kodeItem', matched.kodeItem);
                               handleRowChange(row.id, 'unit', matched.satuan || 'Box');
-                              if (matched.defaultQty) {
-                                handleRowChange(row.id, 'qtyPallet', matched.defaultQty);
-                              }
                             }
                           }}
                           onClick={() => {
@@ -657,7 +702,7 @@ export const PalletInputForm: React.FC<PalletInputFormProps> = ({
                                     <span className="text-blue-600 dark:text-blue-400 font-bold">
                                       Kode: {m.kodeItem}
                                     </span>
-                                    <span>Std: {m.defaultQty} {m.satuan || 'Box'}</span>
+                                    <span>{m.satuan || 'Box'} &middot; {m.beratPerBoxKg ?? 30} Kg/Box</span>
                                   </div>
                                 </div>
                               ))}
@@ -685,7 +730,7 @@ export const PalletInputForm: React.FC<PalletInputFormProps> = ({
                       </div>
                     </div>
 
-                    {/* 3. QTY & SATUAN (DEFAULT 'BOX') */}
+                    {/* 3. QTY & SATUAN (BOX TERINPUT) */}
                     <div className="lg:col-span-2">
                       <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
                         Qty / Pallet <span className="text-red-500">*</span>
@@ -698,7 +743,7 @@ export const PalletInputForm: React.FC<PalletInputFormProps> = ({
                           required
                           value={row.qtyPallet}
                           onChange={(e) => handleRowChange(row.id, 'qtyPallet', e.target.value)}
-                          placeholder="100"
+                          placeholder="Qty Box"
                           className="w-full text-sm font-mono tabular-nums bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-2.5 py-2 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
                         />
                         <select
@@ -714,7 +759,7 @@ export const PalletInputForm: React.FC<PalletInputFormProps> = ({
                         </select>
                       </div>
                       <div className="text-[11px] text-slate-400 mt-1">
-                        Default: Box
+                        Sesuai box terinput
                       </div>
                     </div>
 
@@ -927,6 +972,21 @@ export const PalletInputForm: React.FC<PalletInputFormProps> = ({
                       )}
                     </div>
                   )}
+
+                  {/* Keterangan / Catatan per Pallet (Opsional - masuk daftar Tasklist Pallet Problem bila diisi) */}
+                  <div className="mt-3 pt-2.5 border-t border-slate-100 dark:border-slate-800/80 flex flex-col sm:flex-row sm:items-center gap-2">
+                    <label className="text-[11px] font-semibold text-slate-600 dark:text-slate-400 flex items-center gap-1.5 shrink-0">
+                      <MessageSquareWarning className="w-3.5 h-3.5 text-amber-500" />
+                      <span>Keterangan / Catatan (Opsional):</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={row.keterangan || ''}
+                      onChange={(e) => handleRowChange(row.id, 'keterangan', e.target.value)}
+                      placeholder="Isi jika ada selisih box, box rusak, perlu cek ulang QC/operator..."
+                      className="flex-1 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-1.5 text-slate-800 dark:text-slate-200 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                    />
+                  </div>
 
                   {hasError && (
                     <div className="flex items-center gap-1.5 text-xs text-red-600 dark:text-red-400 mt-2 font-medium">

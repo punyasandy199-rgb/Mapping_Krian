@@ -1,24 +1,34 @@
-import React, { useState } from 'react';
-import { PalletRecord, GUDANG5_SLOTS_A, GUDANG5_SLOTS_B } from '../types/warehouse';
+import React, { useState, useMemo } from 'react';
+import {
+  PalletRecord,
+  MasterWarehouse,
+  getWarehouseRackSlots
+} from '../types/warehouse';
 import { sortBinRecordsByLoadingOrder } from '../utils/binSorting';
-import { MapPin, Box, ArrowDown, Info } from 'lucide-react';
+import { MapPin, Box, ArrowDown } from 'lucide-react';
 
 interface WarehouseBinViewerProps {
   records: PalletRecord[];
+  activeWarehouse?: MasterWarehouse | null;
   onSelectBin?: (binCode: string) => void;
 }
 
 export const WarehouseBinViewer: React.FC<WarehouseBinViewerProps> = ({
   records,
+  activeWarehouse,
   onSelectBin
 }) => {
   const [selectedBin, setSelectedBin] = useState<string | null>(null);
+  const rackConfig = useMemo(() => getWarehouseRackSlots(activeWarehouse), [activeWarehouse]);
+  const warehouseName = activeWarehouse?.namaGudang || 'Gudang 05';
+  const isGudang6 =
+    warehouseName.toLowerCase().includes('6') || rackConfig.leftPrefix.startsWith('6');
 
-  // Group records by bin location (e.g., "5A.1", "5A.2", "5B.1")
-  const binMap = React.useMemo(() => {
+  // Group records by bin location (e.g., "5A.1", "6A.1")
+  const binMap = useMemo(() => {
     const map = new Map<string, PalletRecord[]>();
     records.forEach((record) => {
-      const code = record.lokasiBin.toUpperCase();
+      const code = (record.lokasiBin || '').toUpperCase();
       const existing = map.get(code) || [];
       existing.push(record);
       map.set(code, existing);
@@ -27,29 +37,30 @@ export const WarehouseBinViewer: React.FC<WarehouseBinViewerProps> = ({
   }, [records]);
 
   // Count occupied slots with active (unpicked) pallets
-  const occupiedA = GUDANG5_SLOTS_A.filter(
+  const occupiedA = rackConfig.slotsA.filter(
     (slot) => (binMap.get(slot)?.filter((r) => r.status !== 'OUT').length || 0) > 0
   ).length;
-  const occupiedB = GUDANG5_SLOTS_B.filter(
+  const occupiedB = rackConfig.slotsB.filter(
     (slot) => (binMap.get(slot)?.filter((r) => r.status !== 'OUT').length || 0) > 0
   ).length;
-  const occupiedBPrimary = ['5B.1', '5B.2', '5B.3', '5B.4', '5B.5', '5B.6'].filter(
+  const occupiedBPrimary = rackConfig.slotsBPrimary.filter(
     (slot) => (binMap.get(slot)?.filter((r) => r.status !== 'OUT').length || 0) > 0
   ).length;
 
   const [rangeFilter, setRangeFilter] = useState<string>('all');
   const [showAllBSlots, setShowAllBSlots] = useState<boolean>(false);
 
+  const rowTotal = Math.max(rackConfig.leftCount, rackConfig.rightCount);
+
   // Filter rows based on range
-  const displayedIndices = React.useMemo(() => {
-    const total = 50;
-    if (rangeFilter === '1-10') return Array.from({ length: 10 }, (_, i) => i);
-    if (rangeFilter === '11-20') return Array.from({ length: 10 }, (_, i) => i + 10);
-    if (rangeFilter === '21-30') return Array.from({ length: 10 }, (_, i) => i + 20);
-    if (rangeFilter === '31-40') return Array.from({ length: 10 }, (_, i) => i + 30);
-    if (rangeFilter === '41-50') return Array.from({ length: 10 }, (_, i) => i + 40);
-    return Array.from({ length: total }, (_, i) => i);
-  }, [rangeFilter]);
+  const displayedIndices = useMemo(() => {
+    if (rangeFilter === '1-10') return Array.from({ length: Math.min(10, rowTotal) }, (_, i) => i);
+    if (rangeFilter === '11-20') return Array.from({ length: Math.max(0, Math.min(10, rowTotal - 10)) }, (_, i) => i + 10);
+    if (rangeFilter === '21-30') return Array.from({ length: Math.max(0, Math.min(10, rowTotal - 20)) }, (_, i) => i + 20);
+    if (rangeFilter === '31-40') return Array.from({ length: Math.max(0, Math.min(10, rowTotal - 30)) }, (_, i) => i + 30);
+    if (rangeFilter === '41-50') return Array.from({ length: Math.max(0, Math.min(10, rowTotal - 40)) }, (_, i) => i + 40);
+    return Array.from({ length: rowTotal }, (_, i) => i);
+  }, [rangeFilter, rowTotal]);
 
   const inspectedPallets = selectedBin
     ? sortBinRecordsByLoadingOrder(binMap.get(selectedBin) || [])
@@ -57,7 +68,7 @@ export const WarehouseBinViewer: React.FC<WarehouseBinViewerProps> = ({
 
   return (
     <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm p-5 md:p-6 space-y-6">
-      {/* Header Denah */}
+      {/* Header Denah / Peta */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-slate-200 dark:border-slate-800 gap-3">
         <div>
           <div className="flex items-center gap-2">
@@ -66,25 +77,27 @@ export const WarehouseBinViewer: React.FC<WarehouseBinViewerProps> = ({
             </div>
             <div>
               <h3 className="text-base font-bold text-slate-900 dark:text-white">
-                Denah Tata Letak Bin Gudang 5 (50 Slot)
+                {isGudang6
+                  ? `Peta Tata Letak Rak & Bin ${warehouseName} (${rowTotal} Slot)`
+                  : `Denah Tata Letak Bin ${warehouseName} (${rowTotal} Slot)`}
               </h3>
               <p className="text-xs text-slate-500 mt-0.5">
-                Sisi Kiri: 50 Slot (5A.1–5A.50) · Tengah: Lorong Forklift · Sisi Kanan: 6 Slot Utama (5B.1–5B.6) &amp; s/d 50
+                Sisi Kiri: {rackConfig.leftCount} Slot ({rackConfig.leftPrefix}.1–{rackConfig.leftPrefix}.{rackConfig.leftCount}) &middot; Tengah: Lorong Forklift &middot; Sisi Kanan: {rackConfig.primaryCount} Slot Utama ({rackConfig.rightPrefix}.1–{rackConfig.rightPrefix}.{rackConfig.primaryCount}) &amp; s/d {rackConfig.rightCount}
               </p>
             </div>
           </div>
         </div>
 
         {/* Status Indicators */}
-        <div className="flex flex-wrap items-center gap-2 text-xs font-mono">
+        <div className="flex flex-wrap items-center gap-2 text-xs font-mono tabular-nums">
           <span className="px-2.5 py-1 rounded bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
-            Kiri (5A): <strong className="text-blue-600">{occupiedA}/50</strong>
+            Kiri ({rackConfig.leftPrefix}): <strong className="text-blue-600">{occupiedA}/{rackConfig.leftCount}</strong>
           </span>
           <span className="px-2.5 py-1 rounded bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
-            Kanan (5B Utama): <strong className="text-blue-600">{occupiedBPrimary}/6</strong>
+            Kanan ({rackConfig.rightPrefix} Utama): <strong className="text-blue-600">{occupiedBPrimary}/{rackConfig.primaryCount}</strong>
           </span>
           <span className="px-2.5 py-1 rounded bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
-            Kanan (Total 5B): <strong className="text-purple-600">{occupiedB}/50</strong>
+            Kanan (Total {rackConfig.rightPrefix}): <strong className="text-purple-600">{occupiedB}/{rackConfig.rightCount}</strong>
           </span>
         </div>
       </div>
@@ -94,7 +107,7 @@ export const WarehouseBinViewer: React.FC<WarehouseBinViewerProps> = ({
         <div className="flex flex-wrap items-center gap-1">
           <span className="text-[11px] font-bold text-slate-500 mr-1">Tampilkan Slot:</span>
           {[
-            { id: 'all', label: 'Semua (1-50)' },
+            { id: 'all', label: `Semua (1-${rowTotal})` },
             { id: '1-10', label: '1 - 10' },
             { id: '11-20', label: '11 - 20' },
             { id: '21-30', label: '21 - 30' },
@@ -116,7 +129,7 @@ export const WarehouseBinViewer: React.FC<WarehouseBinViewerProps> = ({
           ))}
         </div>
 
-        {/* Toggle Sisi B: 6 Slot Utama vs Semua 50 Slot */}
+        {/* Toggle Sisi B */}
         <button
           type="button"
           onClick={() => setShowAllBSlots((prev) => !prev)}
@@ -125,18 +138,20 @@ export const WarehouseBinViewer: React.FC<WarehouseBinViewerProps> = ({
               ? 'bg-purple-600 text-white border-purple-600'
               : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border-slate-300 dark:border-slate-700 hover:bg-slate-50'
           }`}
-          title="Tampilkan 6 slot utama (5B.1–5B.6) atau seluruh 50 slot pada sisi kanan B"
+          title={`Tampilkan ${rackConfig.primaryCount} slot utama (${rackConfig.rightPrefix}.1–${rackConfig.rightPrefix}.${rackConfig.primaryCount}) atau seluruh ${rackConfig.rightCount} slot`}
         >
-          {showAllBSlots ? 'Mode Sisi B: Seluruh 50 Slot' : 'Mode Sisi B: 6 Slot Utama'}
+          {showAllBSlots
+            ? `Mode Sisi B: Seluruh ${rackConfig.rightCount} Slot`
+            : `Mode Sisi B: ${rackConfig.primaryCount} Slot Utama`}
         </button>
       </div>
 
-      {/* Visual Denah Layout */}
+      {/* Visual Denah / Peta Layout */}
       <div className="bg-slate-50 dark:bg-slate-950/70 p-4 md:p-6 rounded-2xl border border-slate-200 dark:border-slate-800">
         {/* Layout Column Headers */}
         <div className="grid grid-cols-12 gap-3 mb-3 text-center text-xs font-bold uppercase tracking-wider">
           <div className="col-span-5 sm:col-span-5 bg-blue-600 text-white py-2 px-3 rounded-lg shadow-xs flex items-center justify-center gap-1.5">
-            <span>SISI KIRI (5A) - 50 SLOT</span>
+            <span>SISI KIRI ({rackConfig.leftPrefix}) - {rackConfig.leftCount} SLOT</span>
             <ArrowDown className="w-3.5 h-3.5 opacity-80" />
           </div>
 
@@ -147,8 +162,8 @@ export const WarehouseBinViewer: React.FC<WarehouseBinViewerProps> = ({
           <div className="col-span-5 sm:col-span-5 bg-slate-800 text-white py-2 px-3 rounded-lg shadow-xs flex items-center justify-center gap-1.5">
             <span>
               {showAllBSlots
-                ? 'SISI KANAN (5B) - 50 SLOT'
-                : 'SISI KANAN (5B) - 6 SLOT UTAMA'}
+                ? `SISI KANAN (${rackConfig.rightPrefix}) - ${rackConfig.rightCount} SLOT`
+                : `SISI KANAN (${rackConfig.rightPrefix}) - ${rackConfig.primaryCount} SLOT UTAMA`}
             </span>
             <ArrowDown className="w-3.5 h-3.5 opacity-80" />
           </div>
@@ -158,12 +173,12 @@ export const WarehouseBinViewer: React.FC<WarehouseBinViewerProps> = ({
         <div className="space-y-3 max-h-[68vh] overflow-y-auto pr-1">
           {displayedIndices.map((index) => {
             const rowNumber = index + 1;
-            const slotA = GUDANG5_SLOTS_A[index] || `5A.${rowNumber}`;
-            // Sisi B: 6 slot utama (rowNumber <= 6), or if showAllBSlots or has items
-            const hasItemsInB = (binMap.get(`5B.${rowNumber}`)?.length || 0) > 0;
+            const slotA = rackConfig.slotsA[index] || `${rackConfig.leftPrefix}.${rowNumber}`;
+            const candidateB = `${rackConfig.rightPrefix}.${rowNumber}`;
+            const hasItemsInB = (binMap.get(candidateB)?.length || 0) > 0;
             const slotB =
-              rowNumber <= 6 || showAllBSlots || hasItemsInB
-                ? GUDANG5_SLOTS_B[index] || `5B.${rowNumber}`
+              rowNumber <= rackConfig.primaryCount || showAllBSlots || hasItemsInB
+                ? rackConfig.slotsB[index] || candidateB
                 : null;
 
             const itemsA = binMap.get(slotA) || [];
@@ -261,7 +276,7 @@ export const WarehouseBinViewer: React.FC<WarehouseBinViewerProps> = ({
                         <span className="font-black text-sm text-slate-900 dark:text-white">
                           {slotB}
                         </span>
-                        {rowNumber <= 6 && (
+                        {rowNumber <= rackConfig.primaryCount && (
                           <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-purple-100 dark:bg-purple-950 text-purple-700 dark:text-purple-300">
                             Utama
                           </span>
@@ -301,20 +316,19 @@ export const WarehouseBinViewer: React.FC<WarehouseBinViewerProps> = ({
                     )}
                   </div>
                 ) : (
-                  // Baris > 6 saat mode 6 slot utama
                   <div
                     onClick={() => {
-                      const dynamicSlot = `5B.${rowNumber}`;
+                      const dynamicSlot = `${rackConfig.rightPrefix}.${rowNumber}`;
                       setSelectedBin(dynamicSlot);
                       if (onSelectBin) onSelectBin(dynamicSlot);
                     }}
                     className="col-span-5 sm:col-span-5 p-3 rounded-xl border border-dashed border-slate-300 dark:border-slate-800 bg-slate-100/50 dark:bg-slate-900/20 hover:bg-slate-100 dark:hover:bg-slate-900/40 cursor-pointer flex items-center justify-between text-slate-400 text-center transition-colors"
                   >
                     <span className="text-xs font-mono font-semibold text-slate-500">
-                      5B.{rowNumber}
+                      {rackConfig.rightPrefix}.{rowNumber}
                     </span>
                     <span className="text-[10px] font-mono italic">
-                      + Buka Slot 5B.{rowNumber}
+                      + Buka Slot {rackConfig.rightPrefix}.{rowNumber}
                     </span>
                   </div>
                 )}

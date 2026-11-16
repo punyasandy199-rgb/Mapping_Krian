@@ -6,6 +6,9 @@ import {
   MasterRouteTariff,
   BlacklistRecord,
   WarehouseUser,
+  MasterWarehouse,
+  WarehouseLocationGroup,
+  WAREHOUSE_LOCATION_GROUPS,
   COMMON_UNITS
 } from '../types/warehouse';
 import {
@@ -22,12 +25,23 @@ import {
   Users,
   Check,
   AlertCircle,
-  ChevronDown
+  ChevronDown,
+  Building2,
+  Wrench
 } from 'lucide-react';
+
+export type MasterModalTabKey =
+  | 'tujuan_tarif'
+  | 'armada'
+  | 'barang'
+  | 'gudang'
+  | 'blacklist'
+  | 'users';
 
 interface MasterItemModalProps {
   isOpen: boolean;
   onClose: () => void;
+  initialTab?: MasterModalTabKey;
   // Barang
   masterItems: MasterItem[];
   onAddMasterItem: (item: Omit<MasterItem, 'id'>) => void;
@@ -48,6 +62,11 @@ interface MasterItemModalProps {
   onAddMasterTariff?: (tariff: Omit<MasterRouteTariff, 'id'>) => void;
   onUpdateMasterTariff?: (tariff: MasterRouteTariff) => void;
   onDeleteMasterTariff?: (id: string) => void;
+  // Gudang & Sub-Location
+  masterWarehouses?: MasterWarehouse[];
+  onAddMasterWarehouse?: (warehouse: Omit<MasterWarehouse, 'id'>) => void;
+  onUpdateMasterWarehouse?: (warehouse: MasterWarehouse) => void;
+  onDeleteMasterWarehouse?: (id: string) => void;
   // Blacklist
   blacklistRecords?: BlacklistRecord[];
   onAddBlacklistRecord?: (bl: Omit<BlacklistRecord, 'id'>) => void;
@@ -113,6 +132,7 @@ const PRESET_DESTINATIONS: DestinationPreset[] = [
 export const MasterItemModal: React.FC<MasterItemModalProps> = ({
   isOpen,
   onClose,
+  initialTab,
   masterItems,
   onAddMasterItem,
   onUpdateMasterItem,
@@ -129,6 +149,10 @@ export const MasterItemModal: React.FC<MasterItemModalProps> = ({
   onAddMasterTariff,
   onUpdateMasterTariff,
   onDeleteMasterTariff,
+  masterWarehouses = [],
+  onAddMasterWarehouse,
+  onUpdateMasterWarehouse,
+  onDeleteMasterWarehouse,
   blacklistRecords = [],
   onAddBlacklistRecord,
   onDeleteBlacklistRecord,
@@ -136,10 +160,16 @@ export const MasterItemModal: React.FC<MasterItemModalProps> = ({
   onAddWarehouseUser,
   onDeleteWarehouseUser
 }) => {
-  // Tabs: 'tujuan_tarif' | 'armada' | 'barang' | 'blacklist' | 'users'
-  const [activeMasterTab, setActiveMasterTab] = useState<
-    'tujuan_tarif' | 'armada' | 'barang' | 'blacklist' | 'users'
-  >('tujuan_tarif');
+  // Tabs: 'tujuan_tarif' | 'armada' | 'barang' | 'gudang' | 'blacklist' | 'users'
+  const [activeMasterTab, setActiveMasterTab] = useState<MasterModalTabKey>(
+    initialTab || 'tujuan_tarif'
+  );
+
+  useEffect(() => {
+    if (isOpen && initialTab) {
+      setActiveMasterTab(initialTab);
+    }
+  }, [isOpen, initialTab]);
 
   const [searchTerm, setSearchTerm] = useState('');
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
@@ -223,6 +253,24 @@ export const MasterItemModal: React.FC<MasterItemModalProps> = ({
   const [usrUsername, setUsrUsername] = useState('');
   const [usrRole, setUsrRole] = useState<'Super Admin' | 'Warehouse Admin' | 'Operator Lapangan' | 'Supervisor'>('Operator Lapangan');
   const [usrError, setUsrError] = useState('');
+
+  // -------------------------------------------------------------
+  // TAB 6: GUDANG & SUB-LOCATION FORM STATE
+  // -------------------------------------------------------------
+  const [isWarehouseFormOpen, setIsWarehouseFormOpen] = useState(false);
+  const [editingWarehouseId, setEditingWarehouseId] = useState<string | null>(null);
+  const [whLocationGroup, setWhLocationGroup] = useState<WarehouseLocationGroup>('Gd. KRIAN');
+  const [whKodeGudang, setWhKodeGudang] = useState('');
+  const [whNamaGudang, setWhNamaGudang] = useState('');
+  const [whSubtitle, setWhSubtitle] = useState('');
+  const [whStatus, setWhStatus] = useState<'ACTIVE' | 'MAINTENANCE'>('ACTIVE');
+  const [whLeftPrefix, setWhLeftPrefix] = useState('');
+  const [whRightPrefix, setWhRightPrefix] = useState('');
+  const [whLeftCount, setWhLeftCount] = useState('50');
+  const [whRightCount, setWhRightCount] = useState('50');
+  const [whPrimaryCount, setWhPrimaryCount] = useState('6');
+  const [whKeterangan, setWhKeterangan] = useState('');
+  const [whError, setWhError] = useState('');
 
   if (!isOpen) return null;
 
@@ -512,6 +560,89 @@ export const MasterItemModal: React.FC<MasterItemModalProps> = ({
     setIsUserFormOpen(false);
   };
 
+  // -------------------------------------------------------------
+  // TAB 6 HANDLERS (GUDANG & SUB-LOCATION)
+  // -------------------------------------------------------------
+  const handleStartAddWarehouse = () => {
+    setEditingWarehouseId(null);
+    setWhLocationGroup('Gd. KRIAN');
+    setWhKodeGudang('');
+    setWhNamaGudang('');
+    setWhSubtitle('');
+    setWhStatus('ACTIVE');
+    setWhLeftPrefix('');
+    setWhRightPrefix('');
+    setWhLeftCount('50');
+    setWhRightCount('50');
+    setWhPrimaryCount('6');
+    setWhKeterangan('');
+    setWhError('');
+    setIsWarehouseFormOpen(true);
+  };
+
+  const handleStartEditWarehouse = (wh: MasterWarehouse) => {
+    setEditingWarehouseId(wh.id);
+    setWhLocationGroup(wh.locationGroup);
+    setWhKodeGudang(wh.kodeGudang || '');
+    setWhNamaGudang(wh.namaGudang || '');
+    setWhSubtitle(wh.subtitle || '');
+    setWhStatus(wh.status || 'ACTIVE');
+    setWhLeftPrefix(wh.rackLeftPrefix || '');
+    setWhRightPrefix(wh.rackRightPrefix || '');
+    setWhLeftCount(String(wh.leftSlotCount ?? 50));
+    setWhRightCount(String(wh.rightSlotCount ?? 50));
+    setWhPrimaryCount(String(wh.rightPrimaryCount ?? 6));
+    setWhKeterangan(wh.keterangan || '');
+    setWhError('');
+    setIsWarehouseFormOpen(true);
+  };
+
+  const handleSubmitWarehouse = (e: React.FormEvent) => {
+    e.preventDefault();
+    const kode = whKodeGudang.trim().toUpperCase();
+    const nama = whNamaGudang.trim();
+    if (!kode) {
+      setWhError('Kode Gudang wajib diisi (misal: GD-07, GD-SJA3-01).');
+      return;
+    }
+    if (!nama) {
+      setWhError('Nama Sub-Location / Gudang wajib diisi (misal: Gudang 07).');
+      return;
+    }
+
+    const leftPrefix = (whLeftPrefix.trim() || `${kode.replace(/[^A-Z0-9]/g, '').slice(-2)}A`).toUpperCase();
+    const rightPrefix = (whRightPrefix.trim() || `${kode.replace(/[^A-Z0-9]/g, '').slice(-2)}B`).toUpperCase();
+    const leftCount = Math.max(1, Math.min(200, parseInt(whLeftCount, 10) || 50));
+    const rightCount = Math.max(1, Math.min(200, parseInt(whRightCount, 10) || 50));
+    const primaryCount = Math.max(1, Math.min(rightCount, parseInt(whPrimaryCount, 10) || 6));
+
+    const payload: Omit<MasterWarehouse, 'id'> = {
+      locationGroup: whLocationGroup,
+      kodeGudang: kode,
+      namaGudang: nama,
+      subtitle: whSubtitle.trim() || `Peta Rak ${leftPrefix} & ${rightPrefix} · ${whLocationGroup}`,
+      status: whStatus,
+      rackLeftPrefix: leftPrefix,
+      rackRightPrefix: rightPrefix,
+      leftSlotCount: leftCount,
+      rightSlotCount: rightCount,
+      rightPrimaryCount: primaryCount,
+      keterangan: whKeterangan.trim()
+    };
+
+    if (editingWarehouseId && onUpdateMasterWarehouse) {
+      onUpdateMasterWarehouse({
+        id: editingWarehouseId,
+        ...payload
+      });
+    } else if (onAddMasterWarehouse) {
+      onAddMasterWarehouse(payload);
+    }
+
+    setIsWarehouseFormOpen(false);
+    setEditingWarehouseId(null);
+  };
+
   // Dropdown Autocomplete Filters with auto-hide when no match (User Request)
   const filteredAsalPresets = PRESET_DESTINATIONS.filter((preset) => {
     const q = tariffRuteAwal.toLowerCase().trim();
@@ -581,6 +712,15 @@ export const MasterItemModal: React.FC<MasterItemModalProps> = ({
       u.nama.toLowerCase().includes(searchTerm.toLowerCase()) ||
       u.username.toLowerCase().includes(searchTerm.toLowerCase()) ||
       u.role.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
+  const filteredWarehouses = masterWarehouses.filter(
+    (w) =>
+      w.namaGudang.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      w.kodeGudang.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      w.locationGroup.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (w.rackLeftPrefix || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (w.rackRightPrefix || '').toLowerCase().includes(searchTerm.toLowerCase())
   );
 
   return (
@@ -677,11 +817,28 @@ export const MasterItemModal: React.FC<MasterItemModalProps> = ({
           <button
             type="button"
             onClick={() => {
+              setActiveMasterTab('gudang');
+              setSearchTerm('');
+              setConfirmDeleteId(null);
+            }}
+            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition-all whitespace-nowrap shrink-0 ${
+              activeMasterTab === 'gudang'
+                ? 'bg-emerald-600 text-white shadow-md shadow-emerald-500/25 ring-2 ring-emerald-600/20'
+                : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+            }`}
+          >
+            <Building2 className="w-4 h-4" />
+            <span>GUDANG ({masterWarehouses.length})</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
               setActiveMasterTab('blacklist');
               setSearchTerm('');
               setConfirmDeleteId(null);
             }}
-            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition-all ${
+            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition-all whitespace-nowrap shrink-0 ${
               activeMasterTab === 'blacklist'
                 ? 'bg-rose-600 text-white shadow-md shadow-rose-500/25'
                 : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
@@ -698,7 +855,7 @@ export const MasterItemModal: React.FC<MasterItemModalProps> = ({
               setSearchTerm('');
               setConfirmDeleteId(null);
             }}
-            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition-all ${
+            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition-all whitespace-nowrap shrink-0 ${
               activeMasterTab === 'users'
                 ? 'bg-indigo-600 text-white shadow-md shadow-indigo-500/25'
                 : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
@@ -753,6 +910,17 @@ export const MasterItemModal: React.FC<MasterItemModalProps> = ({
               >
                 <Plus className="w-4 h-4" />
                 <span>+ Tambah Barang Baru</span>
+              </button>
+            )}
+
+            {activeMasterTab === 'gudang' && (
+              <button
+                type="button"
+                onClick={handleStartAddWarehouse}
+                className="flex items-center gap-2 px-4 py-2.5 text-xs sm:text-sm font-bold rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white shadow-md shadow-emerald-500/20 transition-all cursor-pointer"
+              >
+                <Plus className="w-4 h-4" />
+                <span>+ Tambah Gudang / Sub-Location</span>
               </button>
             )}
 
@@ -1873,11 +2041,340 @@ export const MasterItemModal: React.FC<MasterItemModalProps> = ({
           </div>
         )}
 
+        {/* ------------------------------------------------------------- */}
+        {/* TAB 6: MASTER GUDANG & SUB-LOCATION (SJA 3 / GD.137 / KRIAN)  */}
+        {/* ------------------------------------------------------------- */}
+        {activeMasterTab === 'gudang' && (
+          <div className="flex-1 flex flex-col min-h-0 space-y-4 pt-1 overflow-y-auto pr-1">
+            <div className="p-3.5 rounded-xl bg-emerald-50/70 border border-emerald-200 text-xs text-emerald-900 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div>
+                <span className="font-bold">Struktur Location & Sub-Location Gudang:</span>{' '}
+                Tambahkan atau aktifkan gudang baru di bawah Location{' '}
+                <span className="font-mono font-bold">SJA 3</span>,{' '}
+                <span className="font-mono font-bold">Gd. 137</span>, atau{' '}
+                <span className="font-mono font-bold">Gd. KRIAN</span>. Gudang berstatus{' '}
+                <span className="font-bold">Aktif</span> langsung tampil di menu portal &amp; peta rak Bin.
+              </div>
+            </div>
+
+            {isWarehouseFormOpen && (
+              <form
+                onSubmit={handleSubmitWarehouse}
+                className="p-5 rounded-2xl bg-emerald-50/50 border-2 border-emerald-200 space-y-4 shadow-sm animate-in fade-in duration-200"
+              >
+                <div className="flex items-center justify-between pb-2 border-b border-emerald-200">
+                  <div className="font-bold text-sm text-emerald-950 flex items-center gap-2">
+                    <Building2 className="w-4 h-4 text-emerald-600" />
+                    <span>
+                      {editingWarehouseId
+                        ? 'Edit Data Gudang & Sub-Location'
+                        : '+ Tambah Gudang / Sub-Location Baru'}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsWarehouseFormOpen(false)}
+                    className="p-1 text-slate-400 hover:text-slate-700"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 text-xs sm:text-sm">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1.5 uppercase">
+                      Location Induk *
+                    </label>
+                    <select
+                      value={whLocationGroup}
+                      onChange={(e) => setWhLocationGroup(e.target.value as WarehouseLocationGroup)}
+                      className="w-full bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs sm:text-sm font-bold text-slate-900 focus:outline-none focus:border-emerald-500"
+                    >
+                      {WAREHOUSE_LOCATION_GROUPS.map((grp) => (
+                        <option key={grp} value={grp}>
+                          {grp}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1.5 uppercase">
+                      Kode Gudang *
+                    </label>
+                    <input
+                      type="text"
+                      value={whKodeGudang}
+                      onChange={(e) => setWhKodeGudang(e.target.value.toUpperCase())}
+                      placeholder="Contoh: GD-07 / GD-SJA3"
+                      className="w-full bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs sm:text-sm font-mono font-bold text-emerald-700 focus:outline-none focus:border-emerald-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1.5 uppercase">
+                      Nama Sub-Location *
+                    </label>
+                    <input
+                      type="text"
+                      value={whNamaGudang}
+                      onChange={(e) => setWhNamaGudang(e.target.value)}
+                      placeholder="Contoh: Gudang 07"
+                      className="w-full bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs sm:text-sm font-bold text-slate-900 focus:outline-none focus:border-emerald-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1.5 uppercase">
+                      Status Operasional *
+                    </label>
+                    <select
+                      value={whStatus}
+                      onChange={(e) => setWhStatus(e.target.value as 'ACTIVE' | 'MAINTENANCE')}
+                      className="w-full bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs sm:text-sm font-bold text-slate-900 focus:outline-none focus:border-emerald-500"
+                    >
+                      <option value="ACTIVE">Aktif (Siap Operasional)</option>
+                      <option value="MAINTENANCE">Under Maintenance (Menyusul)</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1.5 uppercase">
+                      Prefix Rak Kiri
+                    </label>
+                    <input
+                      type="text"
+                      value={whLeftPrefix}
+                      onChange={(e) => setWhLeftPrefix(e.target.value.toUpperCase())}
+                      placeholder="Misal: 5A, 6A, 7A"
+                      className="w-full bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs sm:text-sm font-mono font-bold text-blue-700 focus:outline-none focus:border-emerald-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1.5 uppercase">
+                      Prefix Rak Kanan
+                    </label>
+                    <input
+                      type="text"
+                      value={whRightPrefix}
+                      onChange={(e) => setWhRightPrefix(e.target.value.toUpperCase())}
+                      placeholder="Misal: 5B, 6B, 7B"
+                      className="w-full bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs sm:text-sm font-mono font-bold text-blue-700 focus:outline-none focus:border-emerald-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1.5 uppercase">
+                      Jumlah Slot Kiri / Kanan
+                    </label>
+                    <div className="grid grid-cols-2 gap-2">
+                      <input
+                        type="number"
+                        min="1"
+                        max="200"
+                        value={whLeftCount}
+                        onChange={(e) => setWhLeftCount(e.target.value)}
+                        title="Jumlah Slot Kiri"
+                        placeholder="50"
+                        className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2.5 text-xs font-bold text-slate-900 focus:outline-none focus:border-emerald-500"
+                      />
+                      <input
+                        type="number"
+                        min="1"
+                        max="200"
+                        value={whRightCount}
+                        onChange={(e) => setWhRightCount(e.target.value)}
+                        title="Jumlah Slot Kanan"
+                        placeholder="50"
+                        className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2.5 text-xs font-bold text-slate-900 focus:outline-none focus:border-emerald-500"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1.5 uppercase">
+                      Slot Utama Kanan
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="100"
+                      value={whPrimaryCount}
+                      onChange={(e) => setWhPrimaryCount(e.target.value)}
+                      placeholder="6"
+                      className="w-full bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs sm:text-sm font-bold text-slate-900 focus:outline-none focus:border-emerald-500"
+                    />
+                  </div>
+
+                  <div className="sm:col-span-2">
+                    <label className="block text-xs font-bold text-slate-700 mb-1.5 uppercase">
+                      Subtitle / Deskripsi Denah
+                    </label>
+                    <input
+                      type="text"
+                      value={whSubtitle}
+                      onChange={(e) => setWhSubtitle(e.target.value)}
+                      placeholder="Contoh: Peta Rak 7A & 7B · Area Krian Baru"
+                      className="w-full bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs sm:text-sm text-slate-900 focus:outline-none focus:border-emerald-500"
+                    />
+                  </div>
+
+                  <div className="sm:col-span-2">
+                    <label className="block text-xs font-bold text-slate-700 mb-1.5 uppercase">
+                      Keterangan Tambahan
+                    </label>
+                    <input
+                      type="text"
+                      value={whKeterangan}
+                      onChange={(e) => setWhKeterangan(e.target.value)}
+                      placeholder="Catatan area gudang / operasional"
+                      className="w-full bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs sm:text-sm text-slate-900 focus:outline-none focus:border-emerald-500"
+                    />
+                  </div>
+                </div>
+
+                {whError && (
+                  <div className="flex items-center gap-2 p-3 rounded-xl bg-red-100 text-red-800 border border-red-300 text-xs font-semibold">
+                    <AlertCircle className="w-4 h-4 shrink-0" />
+                    <span>{whError}</span>
+                  </div>
+                )}
+
+                <div className="flex items-center justify-end gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsWarehouseFormOpen(false)}
+                    className="px-4 py-2 text-xs font-semibold rounded-xl text-slate-600 hover:bg-slate-200 transition-colors"
+                  >
+                    Batal
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-5 py-2 text-xs sm:text-sm font-extrabold rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white shadow-md shadow-emerald-500/20 transition-all cursor-pointer"
+                  >
+                    {editingWarehouseId ? 'Perbarui Gudang' : 'Simpan Gudang'}
+                  </button>
+                </div>
+              </form>
+            )}
+
+            <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden flex-1 flex flex-col">
+              <div className="overflow-x-auto overflow-y-auto max-h-[50vh]">
+                <table className="w-full text-left border-collapse text-xs sm:text-sm">
+                  <thead className="bg-slate-100 text-slate-700 font-extrabold uppercase tracking-wider text-[11px] sticky top-0 z-10 border-b border-slate-300">
+                    <tr>
+                      <th className="py-3 px-4">Location</th>
+                      <th className="py-3 px-4">Kode</th>
+                      <th className="py-3 px-4">Sub-Location (Gudang)</th>
+                      <th className="py-3 px-4">Konfigurasi Rak Bin</th>
+                      <th className="py-3 px-4 text-center">Status</th>
+                      <th className="py-3 px-4 text-center">Aksi</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {filteredWarehouses.length === 0 ? (
+                      <tr>
+                        <td colSpan={6} className="py-12 text-center text-slate-400">
+                          Belum ada data gudang yang cocok. Klik{' '}
+                          <strong>+ Tambah Gudang / Sub-Location</strong>.
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredWarehouses.map((wh) => (
+                        <tr key={wh.id} className="hover:bg-emerald-50/30 transition-colors">
+                          <td className="py-3 px-4">
+                            <span className="px-2.5 py-1 rounded-lg text-xs font-extrabold bg-blue-50 text-blue-800 border border-blue-200 whitespace-nowrap">
+                              {wh.locationGroup}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4 font-mono font-bold text-slate-700 text-xs">
+                            {wh.kodeGudang}
+                          </td>
+                          <td className="py-3 px-4">
+                            <div className="font-extrabold text-slate-900">{wh.namaGudang}</div>
+                            {wh.subtitle && (
+                              <div className="text-[11px] text-slate-500 mt-0.5">{wh.subtitle}</div>
+                            )}
+                          </td>
+                          <td className="py-3 px-4 font-mono text-xs text-slate-700">
+                            <div>
+                              Kiri: <span className="font-bold text-blue-700">{wh.rackLeftPrefix || '5A'}.1–{wh.leftSlotCount ?? 50}</span>
+                            </div>
+                            <div>
+                              Kanan: <span className="font-bold text-indigo-700">{wh.rackRightPrefix || '5B'}.1–{wh.rightSlotCount ?? 50}</span>
+                            </div>
+                          </td>
+                          <td className="py-3 px-4 text-center">
+                            {wh.status === 'ACTIVE' ? (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                                <Check className="w-3 h-3" />
+                                Aktif
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
+                                <Wrench className="w-3 h-3" />
+                                Maintenance
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-3 px-4 text-center">
+                            {confirmDeleteId === wh.id ? (
+                              <div className="flex items-center justify-center gap-1.5 animate-in fade-in">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (onDeleteMasterWarehouse) onDeleteMasterWarehouse(wh.id);
+                                    setConfirmDeleteId(null);
+                                  }}
+                                  className="px-2.5 py-1 rounded-lg bg-red-600 hover:bg-red-700 text-white text-[11px] font-bold"
+                                >
+                                  Ya, Hapus
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setConfirmDeleteId(null)}
+                                  className="px-2 py-1 rounded-lg bg-slate-200 hover:bg-slate-300 text-slate-700 text-[11px] font-semibold"
+                                >
+                                  Batal
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="flex items-center justify-center gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => handleStartEditWarehouse(wh)}
+                                  className="p-1.5 text-blue-600 hover:bg-blue-100 rounded-lg transition-colors"
+                                  title="Edit Gudang"
+                                >
+                                  <Edit3 className="w-4 h-4" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setConfirmDeleteId(wh.id)}
+                                  className="p-1.5 text-red-600 hover:bg-red-100 rounded-lg transition-colors"
+                                  title="Hapus Gudang"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Footer */}
         <div className="pt-4 border-t border-slate-200 flex items-center justify-between text-xs text-slate-500">
           <div className="flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-            <span>Tersinkronisasi otomatis dengan Cloud Firestore Gudang 5</span>
+            <span>Tersinkronisasi otomatis dengan Cloud Firestore PT. Santos Jaya Abadi</span>
           </div>
           <button
             type="button"

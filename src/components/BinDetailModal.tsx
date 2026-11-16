@@ -26,6 +26,7 @@ import {
 
 interface BinDetailModalProps {
   binCode: string | null;
+  warehouseLabel?: string;
   records: PalletRecord[];
   isOpen: boolean;
   onClose: () => void;
@@ -38,6 +39,7 @@ interface BinDetailModalProps {
 
 export const BinDetailModal: React.FC<BinDetailModalProps> = ({
   binCode,
+  warehouseLabel,
   records,
   isOpen,
   onClose,
@@ -55,6 +57,10 @@ export const BinDetailModal: React.FC<BinDetailModalProps> = ({
   const [reorderSuccessMsg, setReorderSuccessMsg] = useState<string | null>(null);
 
   if (!isOpen || !binCode) return null;
+
+  const resolvedWarehouseLabel =
+    warehouseLabel?.trim().toUpperCase() ||
+    (binCode.trim().toUpperCase().startsWith('6') ? 'GUDANG 06' : 'GUDANG 05');
 
   // Filter and sort all items stored in this Bin:
   const rawBinRecords = records.filter(
@@ -74,10 +80,10 @@ export const BinDetailModal: React.FC<BinDetailModalProps> = ({
   const handleDownloadPdf = async () => {
     try {
       setIsDownloadingPdf(true);
-      await downloadBinManifestPdf(binCode, itemsInBin);
+      await downloadBinManifestPdf(binCode, itemsInBin, undefined, resolvedWarehouseLabel);
     } catch (e) {
       console.error(e);
-      alert('Gagal mengunduh PDF');
+      setReorderSuccessMsg('Gagal mengunduh PDF Kartu Bin.');
     } finally {
       setIsDownloadingPdf(false);
     }
@@ -132,7 +138,7 @@ export const BinDetailModal: React.FC<BinDetailModalProps> = ({
                   Detail Muatan Bin: {binCode}
                 </h3>
                 <span className="text-xs font-bold font-mono px-2 py-0.5 rounded bg-blue-100 dark:bg-blue-950 text-blue-800 dark:text-blue-300 border border-blue-300 dark:border-blue-900">
-                  GUDANG 5
+                  {resolvedWarehouseLabel}
                 </span>
               </div>
               <p className="text-xs text-slate-500 mt-0.5">
@@ -478,6 +484,7 @@ export const BinDetailModal: React.FC<BinDetailModalProps> = ({
           isOpen={isPrintManifestOpen}
           onClose={() => setIsPrintManifestOpen(false)}
           binCode={binCode}
+          warehouseLabel={resolvedWarehouseLabel}
           records={itemsInBin}
           onReorderPallets={onReorderPallets}
           onProcessOutbound={onProcessOutbound}

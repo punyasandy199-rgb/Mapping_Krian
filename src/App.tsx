@@ -10,20 +10,27 @@ import {
   MasterRouteTariff,
   BlacklistRecord,
   WarehouseUser,
+  MasterWarehouse,
+  WarehouseLocationGroup,
   SuratJalanRecord,
   DEFAULT_MASTER_ITEMS,
   DEFAULT_MASTER_ROUTES,
   DEFAULT_MASTER_VENDORS,
   DEFAULT_MASTER_ROUTE_TARIFFS,
   DEFAULT_BLACKLIST_RECORDS,
-  DEFAULT_WAREHOUSE_USERS
+  DEFAULT_WAREHOUSE_USERS,
+  DEFAULT_MASTER_WAREHOUSES,
+  getWarehouseRackSlots,
+  resolveWarehouseForBin
 } from './types/warehouse';
 import { PalletInputForm } from './components/PalletInputForm';
 import { BarcodeResultsView } from './components/BarcodeResultsView';
 import { PalletHistoryTable } from './components/PalletHistoryTable';
 import { WarehouseBinViewer } from './components/WarehouseBinViewer';
+import { PalletNotesCheckView } from './components/PalletNotesCheckView';
+import { PalletUpdateMonitorView } from './components/PalletUpdateMonitorView';
 import { BarcodeScannerModal } from './components/BarcodeScannerModal';
-import { MasterItemModal } from './components/MasterItemModal';
+import { MasterItemModal, MasterModalTabKey } from './components/MasterItemModal';
 import { BinDetailModal } from './components/BinDetailModal';
 import { PrintBinManifestModal } from './components/PrintBinManifestModal';
 import { DataBackupModal } from './components/DataBackupModal';
@@ -54,6 +61,9 @@ import {
   subscribeToMasterTariffs,
   saveMasterTariff,
   deleteMasterTariff,
+  subscribeToMasterWarehouses,
+  saveMasterWarehouse,
+  deleteMasterWarehouse,
   subscribeToBlacklist,
   saveBlacklistRecord,
   deleteBlacklistRecord,
@@ -83,7 +93,10 @@ import {
   Menu,
   X,
   UserCheck,
-  ArrowLeft
+  ArrowLeft,
+  ClipboardCheck,
+  Building2,
+  CalendarClock
 } from 'lucide-react';
 
 // Storage Keys
@@ -92,6 +105,7 @@ const MASTER_STORAGE_KEYS = ['wh_master_items_v1', 'wh_master_items'];
 const ROUTE_STORAGE_KEYS = ['wh_master_routes_v1', 'wh_master_routes'];
 const VENDOR_STORAGE_KEYS = ['wh_master_vendors_v1', 'wh_master_vendors'];
 const TARIFF_STORAGE_KEYS = ['wh_master_tariffs_v1', 'wh_master_tariffs'];
+const WAREHOUSE_STORAGE_KEYS = ['wh_master_warehouses_v1'];
 const BLACKLIST_STORAGE_KEYS = ['wh_master_blacklist_v1'];
 const USER_STORAGE_KEYS = ['wh_warehouse_users_v1'];
 const SURAT_STORAGE_KEYS = ['wh_surat_jalan_records_v1', 'wh_surat_jalan_records'];
@@ -101,6 +115,7 @@ const DELETED_ITEMS_KEY = 'pallettrack_deleted_master_items_v1';
 const DELETED_ROUTES_KEY = 'pallettrack_deleted_master_routes_v1';
 const DELETED_VENDORS_KEY = 'pallettrack_deleted_master_vendors_v1';
 const DELETED_TARIFFS_KEY = 'pallettrack_deleted_master_tariffs_v1';
+const DELETED_WAREHOUSES_KEY = 'pallettrack_deleted_warehouses_v1';
 const DELETED_BLACKLIST_KEY = 'pallettrack_deleted_blacklist_v1';
 const DELETED_USERS_KEY = 'pallettrack_deleted_users_v1';
 
@@ -323,18 +338,54 @@ function loadSavedRecords(): PalletRecord[] {
   return [];
 }
 
+function loadSavedMasterWarehouses(): MasterWarehouse[] {
+  const deleted = getDeletedIds(DELETED_WAREHOUSES_KEY);
+  try {
+    for (const key of WAREHOUSE_STORAGE_KEYS) {
+      const stored = localStorage.getItem(key);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const map = new Map<string, MasterWarehouse>();
+          DEFAULT_MASTER_WAREHOUSES.filter((w) => !deleted.has(w.id)).forEach((w) =>
+            map.set(w.id, w)
+          );
+          parsed.filter((w) => w && !deleted.has(w.id)).forEach((w) => map.set(w.id, w));
+          return Array.from(map.values());
+        }
+      }
+    }
+  } catch (e) {
+    console.error('Failed to load master warehouses:', e);
+  }
+  return DEFAULT_MASTER_WAREHOUSES.filter((w) => !deleted.has(w.id));
+}
+
 export default function App() {
-  const [selectedLocation, setSelectedLocation] = useState<'PORTAL' | 'GD_KRIAN'>(() => {
+  // Scan-Only Isolated Bin Mode saat URL berisi ?bin=5A.1
+  const [scanOnlyBin, setScanOnlyBin] = useState<string | null>(() => {
     try {
       const searchParams = new URLSearchParams(window.location.search);
-      return searchParams.get('bin') ? 'GD_KRIAN' : 'PORTAL';
+      const binParam = searchParams.get('bin');
+      return binParam ? binParam.trim().toUpperCase() : null;
     } catch {
-      return 'PORTAL';
+      return null;
     }
   });
 
+  // 2-Level Portal Navigation State
+  const [portalLocationGroup, setPortalLocationGroup] =
+    useState<WarehouseLocationGroup | null>(null);
+  const [activeWarehouseId, setActiveWarehouseId] = useState<string | null>(null);
+
   const [activeTab, setActiveTab] = useState<
-    'input' | 'results' | 'history' | 'bin_map' | 'surat_jalan'
+    | 'input'
+    | 'results'
+    | 'history'
+    | 'bin_map'
+    | 'notes_check'
+    | 'update_monitor'
+    | 'surat_jalan'
   >('input');
 
   // Master Data & User Management State
@@ -342,6 +393,9 @@ export default function App() {
   const [masterRoutes, setMasterRoutes] = useState<MasterRoute[]>(loadSavedMasterRoutes);
   const [masterVendors, setMasterVendors] = useState<MasterVendor[]>(loadSavedMasterVendors);
   const [masterTariffs, setMasterTariffs] = useState<MasterRouteTariff[]>(loadSavedMasterTariffs);
+  const [masterWarehouses, setMasterWarehouses] = useState<MasterWarehouse[]>(
+    loadSavedMasterWarehouses
+  );
   const [blacklistRecords, setBlacklistRecords] = useState<BlacklistRecord[]>(loadSavedBlacklist);
   const [warehouseUsers, setWarehouseUsers] = useState<WarehouseUser[]>(loadSavedWarehouseUsers);
 
@@ -353,6 +407,8 @@ export default function App() {
   // Modals & Controls
   const [isScannerOpen, setIsScannerOpen] = useState(false);
   const [isMasterModalOpen, setIsMasterModalOpen] = useState(false);
+  const [masterModalInitialTab, setMasterModalInitialTab] =
+    useState<MasterModalTabKey>('tujuan_tarif');
   const [isBackupModalOpen, setIsBackupModalOpen] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -362,21 +418,6 @@ export default function App() {
   const [isBinModalOpen, setIsBinModalOpen] = useState(false);
   const [isPrintManifestOpen, setIsPrintManifestOpen] = useState(false);
   const [isCloudConnected, setIsCloudConnected] = useState(false);
-
-  // Check URL query params on load (e.g. ?bin=5A.1)
-  useEffect(() => {
-    try {
-      const searchParams = new URLSearchParams(window.location.search);
-      const binParam = searchParams.get('bin');
-      if (binParam) {
-        setSelectedLocation('GD_KRIAN');
-        setSelectedBinForModal(binParam.toUpperCase());
-        setIsPrintManifestOpen(true);
-      }
-    } catch (e) {
-      console.error('Failed to parse URL query:', e);
-    }
-  }, []);
 
   // Sync dark class on document element
   useEffect(() => {
@@ -468,6 +509,22 @@ export default function App() {
       }
     });
 
+    // 9. Subscribe to Master Warehouses (Lokasi & Sub-Lokasi Gudang)
+    const unsubscribeWarehouses = subscribeToMasterWarehouses((cloudWarehouses) => {
+      const deleted = getDeletedIds(DELETED_WAREHOUSES_KEY);
+      if (cloudWarehouses && cloudWarehouses.length > 0) {
+        setMasterWarehouses((prev) => {
+          const map = new Map<string, MasterWarehouse>();
+          DEFAULT_MASTER_WAREHOUSES.filter((w) => !deleted.has(w.id)).forEach((w) =>
+            map.set(w.id, w)
+          );
+          prev.filter((w) => !deleted.has(w.id)).forEach((w) => map.set(w.id, w));
+          cloudWarehouses.filter((w) => !deleted.has(w.id)).forEach((w) => map.set(w.id, w));
+          return Array.from(map.values());
+        });
+      }
+    });
+
     return () => {
       unsubscribeRecords();
       unsubscribeMaster();
@@ -477,6 +534,7 @@ export default function App() {
       unsubscribeBlacklist();
       unsubscribeUsers();
       unsubscribeSuratJalan();
+      unsubscribeWarehouses();
     };
   }, []);
 
@@ -516,6 +574,12 @@ export default function App() {
       localStorage.setItem(SURAT_STORAGE_KEYS[0], JSON.stringify(suratJalanHistory));
     } catch (e) {}
   }, [suratJalanHistory]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(WAREHOUSE_STORAGE_KEYS[0], JSON.stringify(masterWarehouses));
+    } catch (e) {}
+  }, [masterWarehouses]);
 
   // Master Items Handlers
   const handleAddMasterItem = (newItem: Omit<MasterItem, 'id'>) => {
@@ -641,9 +705,38 @@ export default function App() {
     deleteWarehouseUser(id).catch((err) => console.error('Cloud delete user error:', err));
   };
 
+  // Master Warehouses Handlers
+  const handleAddMasterWarehouse = (newWarehouse: Omit<MasterWarehouse, 'id'>) => {
+    const wh: MasterWarehouse = {
+      ...newWarehouse,
+      id: `wh-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`
+    };
+    setMasterWarehouses((prev) => [...prev, wh]);
+    saveMasterWarehouse(wh).catch((err) => console.error('Cloud save warehouse error:', err));
+  };
+
+  const handleUpdateMasterWarehouse = (updatedWarehouse: MasterWarehouse) => {
+    setMasterWarehouses((prev) =>
+      prev.map((w) => (w.id === updatedWarehouse.id ? updatedWarehouse : w))
+    );
+    saveMasterWarehouse(updatedWarehouse).catch((err) =>
+      console.error('Cloud update warehouse error:', err)
+    );
+  };
+
+  const handleDeleteMasterWarehouse = (id: string) => {
+    recordDeletedId(DELETED_WAREHOUSES_KEY, id);
+    setMasterWarehouses((prev) => prev.filter((w) => w.id !== id));
+    if (activeWarehouseId === id) {
+      setActiveWarehouseId(null);
+    }
+    deleteMasterWarehouse(id).catch((err) => console.error('Cloud delete warehouse error:', err));
+  };
+
   // Surat Jalan Save / Update Handler
   const handleSaveSuratJalan = async (newSurat: SuratJalanRecord) => {
     const isExisting = suratJalanHistory.some((s) => s.id === newSurat.id);
+    const nowIso = new Date().toISOString();
 
     if (isExisting) {
       setSuratJalanHistory((prev) =>
@@ -655,7 +748,9 @@ export default function App() {
             return {
               ...r,
               suratJalanId: newSurat.id,
-              noSuratJalan: newSurat.noSuratJalan
+              noSuratJalan: newSurat.noSuratJalan,
+              updatedAt: nowIso,
+              lastUpdateAction: `Surat Jalan ${newSurat.noSuratJalan}`
             };
           }
           return r;
@@ -670,7 +765,9 @@ export default function App() {
             return {
               ...r,
               suratJalanId: newSurat.id,
-              noSuratJalan: newSurat.noSuratJalan
+              noSuratJalan: newSurat.noSuratJalan,
+              updatedAt: nowIso,
+              lastUpdateAction: `Surat Jalan ${newSurat.noSuratJalan}`
             };
           }
           return r;
@@ -778,15 +875,21 @@ export default function App() {
   };
 
   const handleUpdateRecord = async (updatedRecord: PalletRecord) => {
+    const stampedRecord: PalletRecord = {
+      ...updatedRecord,
+      updatedAt: updatedRecord.updatedAt || new Date().toISOString(),
+      lastUpdateAction: updatedRecord.lastUpdateAction || 'Edit Data Pallet'
+    };
+
     setRecords((prev) =>
-      prev.map((r) => (r.id === updatedRecord.id ? updatedRecord : r))
+      prev.map((r) => (r.id === stampedRecord.id ? stampedRecord : r))
     );
     setCurrentBatch((prev) => {
       if (!prev) return prev;
-      const hasMatch = prev.items.some((i) => i.id === updatedRecord.id);
+      const hasMatch = prev.items.some((i) => i.id === stampedRecord.id);
       if (!hasMatch) return prev;
       const nextItems = prev.items.map((i) =>
-        i.id === updatedRecord.id ? updatedRecord : i
+        i.id === stampedRecord.id ? stampedRecord : i
       );
       return {
         ...prev,
@@ -794,18 +897,26 @@ export default function App() {
         totalQty: nextItems.reduce((sum, i) => sum + (Number(i.qtyPallet) || 0), 0)
       };
     });
-    await updatePalletRecord(updatedRecord);
+    await updatePalletRecord(stampedRecord);
   };
 
   const handleReorderPallets = async (orderedPallets: PalletRecord[]) => {
     const updates = computeReorderedBinEntries(orderedPallets);
     if (updates.length === 0) return;
 
+    const nowIso = new Date().toISOString();
     const orderMap = new Map(updates.map((u) => [u.id, u.binOrder]));
     setRecords((prev) =>
       prev.map((r) => {
         const nextOrder = orderMap.get(r.id);
-        return nextOrder !== undefined ? { ...r, binOrder: nextOrder } : r;
+        return nextOrder !== undefined
+          ? {
+              ...r,
+              binOrder: nextOrder,
+              updatedAt: nowIso,
+              lastUpdateAction: 'Urutan Rak Bin'
+            }
+          : r;
       })
     );
 
@@ -845,7 +956,9 @@ export default function App() {
             status: 'OUT',
             tujuanPengambilan: destination,
             tanggalPengambilan: nowIso,
-            petugasPengambilan: petugas || 'Petugas Lapangan'
+            petugasPengambilan: petugas || 'Petugas Lapangan',
+            updatedAt: nowIso,
+            lastUpdateAction: `Outbound (${destination})`
           };
         }
         return r;
@@ -860,6 +973,7 @@ export default function App() {
   };
 
   const handleRestoreOutbound = async (palletIds: string[]) => {
+    const nowIso = new Date().toISOString();
     setRecords((prev) =>
       prev.map((r) => {
         if (palletIds.includes(r.id)) {
@@ -868,7 +982,9 @@ export default function App() {
             status: 'IN',
             tujuanPengambilan: undefined,
             tanggalPengambilan: undefined,
-            petugasPengambilan: undefined
+            petugasPengambilan: undefined,
+            updatedAt: nowIso,
+            lastUpdateAction: 'Kembalikan ke Bin'
           };
         }
         return r;
@@ -929,23 +1045,166 @@ export default function App() {
     }
   };
 
+  const activeWarehouse =
+    masterWarehouses.find((w) => w.id === activeWarehouseId) || null;
+  const activeRackConfig = getWarehouseRackSlots(activeWarehouse);
+  const isGudang6Active = Boolean(
+    activeWarehouse &&
+      (activeWarehouse.namaGudang.toLowerCase().includes('6') ||
+        activeRackConfig.leftPrefix.startsWith('6'))
+  );
+
+  const notesCheckCount = records.filter(
+    (r) => (r.keterangan || '').trim().length > 0
+  ).length;
+
+  const todayUpdatedCount = (() => {
+    const now = new Date();
+    const todayY = now.getFullYear();
+    const todayM = now.getMonth();
+    const todayD = now.getDate();
+    return records.filter((r) => {
+      const iso = r.updatedAt || r.tanggalPengambilan;
+      if (!iso) return false;
+      const d = new Date(iso);
+      return (
+        !isNaN(d.getTime()) &&
+        d.getFullYear() === todayY &&
+        d.getMonth() === todayM &&
+        d.getDate() === todayD
+      );
+    }).length;
+  })();
+
+  const openMasterModal = (tab: MasterModalTabKey = 'tujuan_tarif') => {
+    setMasterModalInitialTab(tab);
+    setIsMasterModalOpen(true);
+    setIsMobileMenuOpen(false);
+  };
+
+  const sharedMasterModal = (
+    <MasterItemModal
+      isOpen={isMasterModalOpen}
+      onClose={() => setIsMasterModalOpen(false)}
+      initialTab={masterModalInitialTab}
+      masterItems={masterItems}
+      onAddMasterItem={handleAddMasterItem}
+      onUpdateMasterItem={handleUpdateMasterItem}
+      onDeleteMasterItem={handleDeleteMasterItem}
+      masterRoutes={masterRoutes}
+      onAddMasterRoute={handleAddMasterRoute}
+      onUpdateMasterRoute={handleUpdateMasterRoute}
+      onDeleteMasterRoute={handleDeleteMasterRoute}
+      masterVendors={masterVendors}
+      onAddMasterVendor={handleAddMasterVendor}
+      onUpdateMasterVendor={handleUpdateMasterVendor}
+      onDeleteMasterVendor={handleDeleteMasterVendor}
+      masterTariffs={masterTariffs}
+      onAddMasterTariff={handleAddMasterTariff}
+      onUpdateMasterTariff={handleUpdateMasterTariff}
+      onDeleteMasterTariff={handleDeleteMasterTariff}
+      masterWarehouses={masterWarehouses}
+      onAddMasterWarehouse={handleAddMasterWarehouse}
+      onUpdateMasterWarehouse={handleUpdateMasterWarehouse}
+      onDeleteMasterWarehouse={handleDeleteMasterWarehouse}
+      blacklistRecords={blacklistRecords}
+      onAddBlacklistRecord={handleAddBlacklist}
+      onDeleteBlacklistRecord={handleDeleteBlacklist}
+      warehouseUsers={warehouseUsers}
+      onAddWarehouseUser={handleAddWarehouseUser}
+      onDeleteWarehouseUser={handleDeleteWarehouseUser}
+    />
+  );
+
+  // ISOLATED QR SCAN BIN MODE (?bin=5A.1) -> HANYA tampilkan pallet di Bin tersebut!
+  if (scanOnlyBin) {
+    const scanWarehouse = resolveWarehouseForBin(
+      scanOnlyBin,
+      masterWarehouses,
+      activeWarehouse
+    );
+    const binOnlyRecords = records.filter(
+      (r) => (r.lokasiBin || '').trim().toUpperCase() === scanOnlyBin
+    );
+
+    const handleExitScanMode = () => {
+      try {
+        window.history.replaceState({}, '', window.location.pathname);
+      } catch {}
+      setScanOnlyBin(null);
+      setIsPrintManifestOpen(false);
+      setSelectedBinForModal(null);
+    };
+
+    return (
+      <PrintBinManifestModal
+        isOpen={true}
+        isolatedScanMode={true}
+        onClose={handleExitScanMode}
+        binCode={scanOnlyBin}
+        warehouseLabel={`${scanWarehouse?.namaGudang || 'Gudang'} · ${
+          scanWarehouse?.locationGroup || 'Gd. KRIAN'
+        }`}
+        records={binOnlyRecords}
+        onReorderPallets={handleReorderPallets}
+        onProcessOutbound={handleProcessOutbound}
+        onRestoreOutbound={handleRestoreOutbound}
+      />
+    );
+  }
+
+  // PORTAL VIEW (Level 1 SJA 3 / Gd. 137 / Gd. KRIAN -> Level 2 Sub-Lokasi Gudang 05 / Gudang 06)
+  if (!activeWarehouse) {
+    return (
+      <>
+        <LocationPortalView
+          masterWarehouses={masterWarehouses}
+          selectedLocationGroup={portalLocationGroup}
+          onSelectLocationGroup={setPortalLocationGroup}
+          onSelectWarehouse={(wh) => {
+            setActiveWarehouseId(wh.id);
+            setPortalLocationGroup(wh.locationGroup);
+            setActiveTab('bin_map');
+          }}
+          onOpenWarehouseManagement={() => openMasterModal('gudang')}
+          records={records}
+          totalSuratJalan={suratJalanHistory.length}
+          isCloudConnected={isCloudConnected}
+          isDarkMode={isDarkMode}
+          onToggleDarkMode={() => setIsDarkMode(!isDarkMode)}
+        />
+        {sharedMasterModal}
+      </>
+    );
+  }
+
   // Titles for current active view
   const tabTitles: Record<typeof activeTab, { title: string; subtitle: string }> = {
     input: {
       title: 'Input Data Pallet & Cetak Barcode',
-      subtitle: 'Entri 1-8 baris pallet, scan otomatis, alokasi Bin 5A.1 s/d 5B.50'
+      subtitle: `Entri 1-8 baris pallet, scan otomatis, alokasi Bin ${activeRackConfig.leftPrefix}.1 s/d ${activeRackConfig.rightPrefix}.${activeRackConfig.rightCount}`
     },
     results: {
       title: 'Hasil Barcode Pallet Terbit',
       subtitle: 'Label Code 128 dan QR Bin siap cetak format stiker A4'
     },
     history: {
-      title: 'Riwayat Pallet Gudang 5',
+      title: `Riwayat Pallet ${activeWarehouse.namaGudang}`,
       subtitle: 'Pelacakan stok pallet masuk, riwayat outbound, dan pengambilan muatan'
     },
     bin_map: {
-      title: 'Denah Rak & Lokasi Bin Gudang 5',
-      subtitle: 'Visualisasi denah rak 5A dan 5B dengan status isi real-time'
+      title: `${isGudang6Active ? 'Peta Rak & Lokasi Bin' : 'Denah Rak & Lokasi Bin'} ${
+        activeWarehouse.namaGudang
+      }`,
+      subtitle: `Visualisasi tata letak rak ${activeRackConfig.leftPrefix} dan ${activeRackConfig.rightPrefix} dengan status isi real-time`
+    },
+    notes_check: {
+      title: 'Tasklist Pallet Problem',
+      subtitle: 'Daftar pallet dengan catatan problem / kendala untuk ditindaklanjuti & diedit langsung'
+    },
+    update_monitor: {
+      title: 'Monitoring Update Pallet Harian',
+      subtitle: 'Pantau jumlah dan rincian pallet yang mengalami pembaruan pada tanggal tertentu'
     },
     surat_jalan: {
       title: 'Surat Jalan / Delivery Note',
@@ -953,28 +1212,10 @@ export default function App() {
     }
   };
 
-  const activeBinsCount = new Set(
-    records.filter((r) => r.status !== 'OUT').map((r) => r.lokasiBin.toUpperCase())
-  ).size;
-
-  if (selectedLocation === 'PORTAL') {
-    return (
-      <LocationPortalView
-        onSelectLocation={(loc) => setSelectedLocation(loc)}
-        totalRecords={records.length}
-        activeBinsCount={activeBinsCount}
-        totalSuratJalan={suratJalanHistory.length}
-        isCloudConnected={isCloudConnected}
-        isDarkMode={isDarkMode}
-        onToggleDarkMode={() => setIsDarkMode(!isDarkMode)}
-      />
-    );
-  }
-
   return (
     <div className="min-h-screen bg-slate-100 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col md:flex-row font-sans transition-colors duration-200">
       {/* ---------------------------------------------------------------- */}
-      {/* LEFT SIDEBAR NAVIGATION ("Ke samping kiri dan lebih proper")    */}
+      {/* LEFT SIDEBAR NAVIGATION                                          */}
       {/* ---------------------------------------------------------------- */}
       <aside
         className={`no-print w-full md:w-64 xl:w-72 bg-white dark:bg-[#0f141c] border-r border-slate-200 dark:border-slate-800 flex flex-col shrink-0 md:sticky md:top-0 md:h-screen z-40 select-none shadow-sm transition-all ${
@@ -993,7 +1234,7 @@ export default function App() {
                   PalletTrack
                 </span>
                 <span className="text-[11px] font-bold text-blue-600 dark:text-cyan-400">
-                  Gd. KRIAN · Gudang 5
+                  {activeWarehouse.locationGroup} · {activeWarehouse.namaGudang}
                 </span>
               </div>
             </div>
@@ -1007,22 +1248,46 @@ export default function App() {
             </button>
           </div>
 
-          {/* Back to Location Portal Button */}
-          <button
-            type="button"
-            onClick={() => {
-              setSelectedLocation('PORTAL');
-              setIsMobileMenuOpen(false);
-            }}
-            className="mt-3 w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-semibold bg-slate-100 dark:bg-slate-800/80 hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 transition-colors cursor-pointer"
-            title="Kembali ke pilihan lokasi Monitoring Produk IC — SJA 3"
-          >
-            <span className="flex items-center gap-2">
-              <ArrowLeft className="w-3.5 h-3.5 text-blue-600 dark:text-cyan-400" />
-              <span>Menu Lokasi Gudang</span>
-            </span>
-            <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400">SJA 3</span>
-          </button>
+          {/* Back to Sub-Location Mapping / Portal Button */}
+          <div className="mt-3 grid grid-cols-1 gap-1.5">
+            <button
+              type="button"
+              onClick={() => {
+                setPortalLocationGroup(activeWarehouse.locationGroup);
+                setActiveWarehouseId(null);
+                setIsMobileMenuOpen(false);
+              }}
+              className="w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-semibold bg-blue-50 dark:bg-blue-950/50 hover:bg-blue-100 dark:hover:bg-blue-900/50 text-blue-700 dark:text-blue-200 border border-blue-200 dark:border-blue-800 transition-colors cursor-pointer"
+              title={`Ganti sub-gudang di ${activeWarehouse.locationGroup}`}
+            >
+              <span className="flex items-center gap-2">
+                <Building2 className="w-3.5 h-3.5 text-blue-600 dark:text-cyan-400" />
+                <span>Ganti Gudang ({activeWarehouse.locationGroup})</span>
+              </span>
+              <span className="text-[10px] font-mono font-bold">
+                {activeWarehouse.kodeGudang}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setPortalLocationGroup(null);
+                setActiveWarehouseId(null);
+                setIsMobileMenuOpen(false);
+              }}
+              className="w-full flex items-center justify-between px-3 py-1.5 rounded-lg text-[11px] font-semibold bg-slate-100 dark:bg-slate-800/80 hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 transition-colors cursor-pointer"
+              title="Kembali ke pilihan lokasi Monitoring Produk IC — SJA 3"
+            >
+              <span className="flex items-center gap-2">
+                <ArrowLeft className="w-3 h-3 text-slate-500" />
+                <span>Menu Lokasi Utama</span>
+              </span>
+              <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400">
+                SJA 3
+              </span>
+            </button>
+          </div>
 
           {/* Real-time Cloud Connection Status */}
           <div className="mt-2.5">
@@ -1136,8 +1401,70 @@ export default function App() {
               >
                 <div className="flex items-center gap-2.5">
                   <MapPin className="w-4 h-4" />
-                  <span>Denah Bin Gudang 5</span>
+                  <span>
+                    {isGudang6Active
+                      ? `Peta Bin ${activeWarehouse.namaGudang}`
+                      : `Denah Bin ${activeWarehouse.namaGudang}`}
+                  </span>
                 </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveTab('notes_check');
+                  setIsMobileMenuOpen(false);
+                }}
+                className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold transition-all ${
+                  activeTab === 'notes_check'
+                    ? 'bg-amber-600 text-white shadow-md shadow-amber-600/20'
+                    : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800/60'
+                }`}
+              >
+                <div className="flex items-center gap-2.5">
+                  <ClipboardCheck className="w-4 h-4" />
+                  <span>Tasklist Pallet Problem</span>
+                </div>
+                <span
+                  className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                    activeTab === 'notes_check'
+                      ? 'bg-white/20 text-white'
+                      : notesCheckCount > 0
+                      ? 'bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300'
+                      : 'bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400'
+                  }`}
+                >
+                  {notesCheckCount}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveTab('update_monitor');
+                  setIsMobileMenuOpen(false);
+                }}
+                className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold transition-all ${
+                  activeTab === 'update_monitor'
+                    ? 'bg-blue-600 text-white shadow-md shadow-blue-600/20'
+                    : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800/60'
+                }`}
+              >
+                <div className="flex items-center gap-2.5">
+                  <CalendarClock className="w-4 h-4" />
+                  <span>Monitoring Update</span>
+                </div>
+                <span
+                  className={`px-2 py-0.5 rounded-full text-[10px] font-bold tabular-nums ${
+                    activeTab === 'update_monitor'
+                      ? 'bg-white/20 text-white'
+                      : todayUpdatedCount > 0
+                      ? 'bg-blue-100 dark:bg-blue-950 text-blue-800 dark:text-blue-300'
+                      : 'bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400'
+                  }`}
+                >
+                  {todayUpdatedCount}
+                </span>
               </button>
             </div>
           </div>
@@ -1185,10 +1512,7 @@ export default function App() {
             <div className="space-y-1">
               <button
                 type="button"
-                onClick={() => {
-                  setIsMasterModalOpen(true);
-                  setIsMobileMenuOpen(false);
-                }}
+                onClick={() => openMasterModal('tujuan_tarif')}
                 className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-cyan-50 dark:hover:bg-cyan-950/40 hover:text-cyan-600 dark:hover:text-cyan-400 transition-colors group"
                 title="Buka User Management & Master Data Aplikasi"
               >
@@ -1197,7 +1521,7 @@ export default function App() {
                   <span>User Management</span>
                 </div>
                 <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-cyan-100 dark:bg-cyan-950 text-cyan-700 dark:text-cyan-300">
-                  {masterTariffs.length + masterItems.length}
+                  {masterTariffs.length + masterItems.length + masterWarehouses.length}
                 </span>
               </button>
 
@@ -1266,16 +1590,19 @@ export default function App() {
             </div>
             <div>
               <span className="font-bold text-sm block leading-none">PalletTrack</span>
-              <span className="text-[10px] text-slate-500">Gudang 5</span>
+              <span className="text-[10px] text-slate-500">{activeWarehouse.namaGudang}</span>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => setSelectedLocation('PORTAL')}
+              onClick={() => {
+                setPortalLocationGroup(activeWarehouse.locationGroup);
+                setActiveWarehouseId(null);
+              }}
               className="p-2 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200"
-              title="Menu Lokasi Gudang"
+              title="Ganti Gudang"
             >
               <ArrowLeft className="w-4 h-4" />
             </button>
@@ -1300,12 +1627,12 @@ export default function App() {
         <header className="no-print bg-white/60 dark:bg-[#0f141c]/60 backdrop-blur-xs border-b border-slate-200 dark:border-slate-800 px-4 sm:px-6 lg:px-8 py-3.5 sticky top-0 z-20">
           <div className="max-w-7xl mx-auto flex flex-col sm:flex-row sm:items-center justify-between gap-2">
             <div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <h1 className="text-base font-extrabold text-slate-900 dark:text-white">
                   {tabTitles[activeTab]?.title || 'PalletTrack'}
                 </h1>
                 <span className="text-xs px-2 py-0.5 rounded-full font-semibold bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-900">
-                  Gd. KRIAN · Gudang 5 SJA
+                  {activeWarehouse.locationGroup} · {activeWarehouse.namaGudang}
                 </span>
               </div>
               <p className="text-xs text-slate-500 mt-0.5">
@@ -1333,7 +1660,8 @@ export default function App() {
             <div className="space-y-6">
               <PalletInputForm
                 masterItems={masterItems}
-                onOpenMasterDatabase={() => setIsMasterModalOpen(true)}
+                activeWarehouse={activeWarehouse}
+                onOpenMasterDatabase={() => openMasterModal('barang')}
                 onOpenBinDetail={handleOpenBinDetail}
                 onSubmit={handleFormSubmit}
               />
@@ -1365,9 +1693,26 @@ export default function App() {
           {activeTab === 'bin_map' && (
             <WarehouseBinViewer
               records={records}
+              activeWarehouse={activeWarehouse}
               onSelectBin={(binCode) => {
                 handleOpenBinDetail(binCode);
               }}
+            />
+          )}
+
+          {activeTab === 'notes_check' && (
+            <PalletNotesCheckView
+              records={records}
+              masterItems={masterItems}
+              onUpdateRecord={handleUpdateRecord}
+            />
+          )}
+
+          {activeTab === 'update_monitor' && (
+            <PalletUpdateMonitorView
+              records={records}
+              activeWarehouse={activeWarehouse}
+              onOpenHistory={() => setActiveTab('history')}
             />
           )}
 
@@ -1390,7 +1735,7 @@ export default function App() {
             <div className="flex items-center gap-2">
               <ShieldCheck className="w-4 h-4 text-emerald-600" />
               <span>
-                PT. Santos Jaya Abadi · Sistem Inbound Pallet Gudang 5 Sukodono & Barcode Code 128
+                PT. Santos Jaya Abadi · {activeWarehouse.locationGroup} ({activeWarehouse.namaGudang}) &amp; Barcode Code 128
               </span>
             </div>
             <div className="text-[11px] text-slate-400">
@@ -1405,32 +1750,7 @@ export default function App() {
       {/* ---------------------------------------------------------------- */}
 
       {/* Master Data & User Management Modal */}
-      <MasterItemModal
-        isOpen={isMasterModalOpen}
-        onClose={() => setIsMasterModalOpen(false)}
-        masterItems={masterItems}
-        onAddMasterItem={handleAddMasterItem}
-        onUpdateMasterItem={handleUpdateMasterItem}
-        onDeleteMasterItem={handleDeleteMasterItem}
-        masterRoutes={masterRoutes}
-        onAddMasterRoute={handleAddMasterRoute}
-        onUpdateMasterRoute={handleUpdateMasterRoute}
-        onDeleteMasterRoute={handleDeleteMasterRoute}
-        masterVendors={masterVendors}
-        onAddMasterVendor={handleAddMasterVendor}
-        onUpdateMasterVendor={handleUpdateMasterVendor}
-        onDeleteMasterVendor={handleDeleteMasterVendor}
-        masterTariffs={masterTariffs}
-        onAddMasterTariff={handleAddMasterTariff}
-        onUpdateMasterTariff={handleUpdateMasterTariff}
-        onDeleteMasterTariff={handleDeleteMasterTariff}
-        blacklistRecords={blacklistRecords}
-        onAddBlacklistRecord={handleAddBlacklist}
-        onDeleteBlacklistRecord={handleDeleteBlacklist}
-        warehouseUsers={warehouseUsers}
-        onAddWarehouseUser={handleAddWarehouseUser}
-        onDeleteWarehouseUser={handleDeleteWarehouseUser}
-      />
+      {sharedMasterModal}
 
       {/* Barcode & QR Scanner Modal */}
       <BarcodeScannerModal
@@ -1453,6 +1773,14 @@ export default function App() {
           setSelectedBinForModal(null);
         }}
         binCode={selectedBinForModal || ''}
+        warehouseLabel={(() => {
+          const wh = resolveWarehouseForBin(
+            selectedBinForModal || '',
+            masterWarehouses,
+            activeWarehouse
+          );
+          return wh ? `${wh.namaGudang} · ${wh.locationGroup}` : activeWarehouse.namaGudang;
+        })()}
         records={records}
         onReorderPallets={handleReorderPallets}
         onProcessOutbound={handleProcessOutbound}
@@ -1472,6 +1800,14 @@ export default function App() {
           setSelectedBinForModal(null);
         }}
         binCode={selectedBinForModal || ''}
+        warehouseLabel={(() => {
+          const wh = resolveWarehouseForBin(
+            selectedBinForModal || '',
+            masterWarehouses,
+            activeWarehouse
+          );
+          return wh ? `${wh.namaGudang} · ${wh.locationGroup}` : activeWarehouse.namaGudang;
+        })()}
         records={records}
         onReorderPallets={handleReorderPallets}
         onProcessOutbound={handleProcessOutbound}
