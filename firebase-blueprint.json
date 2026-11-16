@@ -34,6 +34,8 @@
         "lokasiBin": { "type": "string" },
         "keterangan": { "type": "string" },
         "submittedAt": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "lastUpdateAction": { "type": "string" },
         "binOrder": { "type": "number" }
       },
       "required": [
@@ -122,6 +124,32 @@
         "username",
         "role"
       ]
+    },
+    "MasterWarehouse": {
+      "title": "MasterWarehouse",
+      "description": "Warehouse location group and sub-location configuration",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "locationGroup": { "type": "string" },
+        "kodeGudang": { "type": "string" },
+        "namaGudang": { "type": "string" },
+        "subtitle": { "type": "string" },
+        "status": { "type": "string" },
+        "rackLeftPrefix": { "type": "string" },
+        "rackRightPrefix": { "type": "string" },
+        "leftSlotCount": { "type": "number" },
+        "rightSlotCount": { "type": "number" },
+        "rightPrimaryCount": { "type": "number" },
+        "keterangan": { "type": "string" }
+      },
+      "required": [
+        "id",
+        "locationGroup",
+        "kodeGudang",
+        "namaGudang",
+        "status"
+      ]
     }
   },
   "firestore": {
@@ -154,6 +182,12 @@
         "$ref": "#/entities/WarehouseUser"
       },
       "description": "Warehouse operators and supervisors"
+    },
+    "/master_warehouses/{warehouseId}": {
+      "schema": {
+        "$ref": "#/entities/MasterWarehouse"
+      },
+      "description": "Warehouse locations and sub-locations"
     }
   }
 }

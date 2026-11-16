@@ -75,5 +75,11 @@ service cloud.firestore {
       allow read: if true;
       allow create, update, delete: if isValidId(suratId);
     }
+
+    // Master Gudang & Sub-Location
+    match /master_warehouses/{warehouseId} {
+      allow read: if true;
+      allow create, update, delete: if isValidId(warehouseId);
+    }
   }
 }
