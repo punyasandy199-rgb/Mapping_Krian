@@ -19,9 +19,22 @@
         "boxAkhir": { "type": "string" },
         "batchAwal": { "type": "string" },
         "batchAkhir": { "type": "string" },
+        "batches": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "noBatch": { "type": "string" },
+              "boxAwal": { "type": "string" },
+              "boxAkhir": { "type": "string" },
+              "qtyBox": { "type": "number" }
+            }
+          }
+        },
         "lokasiBin": { "type": "string" },
         "keterangan": { "type": "string" },
-        "submittedAt": { "type": "string" }
+        "submittedAt": { "type": "string" },
+        "binOrder": { "type": "number" }
       },
       "required": [
         "id",
@@ -42,6 +55,7 @@
         "namaBarang": { "type": "string" },
         "satuan": { "type": "string" },
         "defaultQty": { "type": "number" },
+        "beratPerBoxKg": { "type": "number" },
         "kategori": { "type": "string" },
         "updatedAt": { "type": "string" }
       },
@@ -49,6 +63,64 @@
         "id",
         "kodeItem",
         "namaBarang"
+      ]
+    },
+    "MasterRouteTariff": {
+      "title": "MasterRouteTariff",
+      "description": "Freight route and multi-vendor pricing record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "ruteAwal": { "type": "string" },
+        "ruteTujuan": { "type": "string" },
+        "alamatTujuan": { "type": "string" },
+        "vendor": { "type": "string" },
+        "tarif": { "type": "number" },
+        "ppnPersen": { "type": "number" }
+      },
+      "required": [
+        "id",
+        "ruteAwal",
+        "ruteTujuan",
+        "vendor",
+        "tarif"
+      ]
+    },
+    "BlacklistRecord": {
+      "title": "BlacklistRecord",
+      "description": "Blacklist record for trucks, drivers, vendors, or pallets",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "tipe": { "type": "string" },
+        "identifier": { "type": "string" },
+        "alasan": { "type": "string" },
+        "tanggal": { "type": "string" },
+        "status": { "type": "string" }
+      },
+      "required": [
+        "id",
+        "tipe",
+        "identifier",
+        "alasan"
+      ]
+    },
+    "WarehouseUser": {
+      "title": "WarehouseUser",
+      "description": "Warehouse operator and administrator user account",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "nama": { "type": "string" },
+        "username": { "type": "string" },
+        "role": { "type": "string" },
+        "status": { "type": "string" }
+      },
+      "required": [
+        "id",
+        "nama",
+        "username",
+        "role"
       ]
     }
   },
@@ -64,6 +136,24 @@
         "$ref": "#/entities/MasterItem"
       },
       "description": "Catalog of warehouse products and SKUs"
+    },
+    "/master_route_tariffs/{tariffId}": {
+      "schema": {
+        "$ref": "#/entities/MasterRouteTariff"
+      },
+      "description": "Route destinations and vendor freight tariffs"
+    },
+    "/master_blacklist/{blacklistId}": {
+      "schema": {
+        "$ref": "#/entities/BlacklistRecord"
+      },
+      "description": "Operational blacklist records"
+    },
+    "/warehouse_users/{userId}": {
+      "schema": {
+        "$ref": "#/entities/WarehouseUser"
+      },
+      "description": "Warehouse operators and supervisors"
     }
   }
 }

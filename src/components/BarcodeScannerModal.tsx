@@ -8,13 +8,17 @@ interface BarcodeScannerModalProps {
   isOpen: boolean;
   onClose: () => void;
   onOpenBinDetail?: (binCode: string) => void;
+  onSelectBinManifest?: (binCode: string) => void;
+  onProcessOutbound?: (palletIds: string[], destination: string, petugas?: string) => Promise<void> | void;
 }
 
 export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
   records,
   isOpen,
   onClose,
-  onOpenBinDetail
+  onOpenBinDetail,
+  onSelectBinManifest,
+  onProcessOutbound
 }) => {
   const [query, setQuery] = useState('');
   const [foundBarcodeRecord, setFoundBarcodeRecord] = useState<PalletRecord | null>(null);

@@ -1,4 +1,9 @@
 import { PalletRecord } from '../types/warehouse';
+import {
+  formatPalletBatchNumbers,
+  formatPalletBoxRanges,
+  getPalletBatches
+} from './batchCalculator';
 
 /**
  * Exports pallet records to a CSV file readable by Microsoft Excel, Google Sheets, etc.
@@ -20,6 +25,7 @@ export function exportPalletsToCsv(records: PalletRecord[], filenamePrefix = 'da
     'No. Batch',
     'No. Box Awal',
     'No. Box Akhir',
+    'Detail Multi-Batch',
     'ID Batch Transaksi',
     'Keterangan',
     'Waktu Input'
@@ -31,21 +37,30 @@ export function exportPalletsToCsv(records: PalletRecord[], filenamePrefix = 'da
     return `"${val}"`;
   };
 
-  const rows = records.map((item) => [
-    escapeCsv(item.barcodeNumber),
-    escapeCsv(item.nomorPallet || '-'),
-    escapeCsv(item.lokasiBin),
-    escapeCsv(item.kodeItem || '-'),
-    escapeCsv(item.namaBarang),
-    item.qtyPallet,
-    escapeCsv(item.unit || 'Box'),
-    escapeCsv(item.noBatch || '-'),
-    escapeCsv(item.boxAwal || item.batchAwal || '-'),
-    escapeCsv(item.boxAkhir || item.batchAkhir || '-'),
-    escapeCsv(item.batchId),
-    escapeCsv(item.keterangan || '-'),
-    escapeCsv(new Date(item.submittedAt).toLocaleString('id-ID'))
-  ]);
+  const rows = records.map((item) => {
+    const batches = getPalletBatches(item);
+    const multiDetail =
+      batches.length > 1
+        ? batches.map((b) => `${b.noBatch || '-'} (${b.boxAwal || '-'}-${b.boxAkhir || '-'})`).join('; ')
+        : formatPalletBoxRanges(item);
+
+    return [
+      escapeCsv(item.barcodeNumber),
+      escapeCsv(item.nomorPallet || '-'),
+      escapeCsv(item.lokasiBin),
+      escapeCsv(item.kodeItem || '-'),
+      escapeCsv(item.namaBarang),
+      item.qtyPallet,
+      escapeCsv(item.unit || 'Box'),
+      escapeCsv(formatPalletBatchNumbers(item)),
+      escapeCsv(item.boxAwal || item.batchAwal || '-'),
+      escapeCsv(item.boxAkhir || item.batchAkhir || '-'),
+      escapeCsv(multiDetail),
+      escapeCsv(item.batchId),
+      escapeCsv(item.keterangan || '-'),
+      escapeCsv(new Date(item.submittedAt).toLocaleString('id-ID'))
+    ];
+  });
 
   const csvContent = [
     headers.join(','),

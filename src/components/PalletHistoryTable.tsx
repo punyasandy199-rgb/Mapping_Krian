@@ -1,7 +1,16 @@
 import React, { useState, useMemo } from 'react';
-import { PalletRecord, GUDANG5_QUICK_BINS } from '../types/warehouse';
+import {
+  PalletRecord,
+  PalletBatchEntry,
+  MasterItem,
+  COMMON_UNITS,
+  GUDANG5_QUICK_BINS,
+  GUDANG5_SLOTS_A,
+  GUDANG5_SLOTS_B
+} from '../types/warehouse';
 import { exportPalletsToCsv } from '../utils/exporter';
 import { sortBinRecordsByLoadingOrder } from '../utils/binSorting';
+import { calculateBatchBoxCount, getPalletBatches } from '../utils/batchCalculator';
 import {
   downloadPalletLabelPdf,
   downloadPalletHistoryReportPdf,
@@ -30,11 +39,23 @@ import {
   ChevronDown,
   ExternalLink,
   Eye,
-  EyeOff
+  EyeOff,
+  Edit3,
+  Plus,
+  Save,
+  X,
+  AlertCircle,
+  CheckCircle2,
+  GripVertical,
+  ArrowUp,
+  ArrowDown
 } from 'lucide-react';
 
 interface PalletHistoryTableProps {
   records: PalletRecord[];
+  masterItems?: MasterItem[];
+  onUpdateRecord?: (updated: PalletRecord) => Promise<void> | void;
+  onReorderPallets?: (orderedRecords: PalletRecord[]) => Promise<void> | void;
   onDeleteRecord: (id: string) => void;
   onClearAll: () => void;
   onNewInput: () => void;
@@ -44,6 +65,9 @@ interface PalletHistoryTableProps {
 
 export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
   records,
+  masterItems = [],
+  onUpdateRecord,
+  onReorderPallets,
   onDeleteRecord,
   onClearAll,
   onNewInput,
@@ -58,6 +82,18 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
 
   // Per-Bin Accordion state: by default collapsed ("list per bin tidak perlu dilihatkan")
   const [expandedBinCodes, setExpandedBinCodes] = useState<Set<string>>(new Set());
+
+  // Drag-and-drop reorder state (scoped per Bin)
+  const [draggedItem, setDraggedItem] = useState<{ id: string; binCode: string } | null>(null);
+  const [dragOverItem, setDragOverItem] = useState<{ id: string; binCode: string } | null>(null);
+  const [isReordering, setIsReordering] = useState(false);
+
+  // Edit Pallet Modal state
+  const [editingRecord, setEditingRecord] = useState<PalletRecord | null>(null);
+  const [editBatches, setEditBatches] = useState<PalletBatchEntry[]>([]);
+  const [editError, setEditError] = useState<string | null>(null);
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
+  const [editSuccessMsg, setEditSuccessMsg] = useState<string | null>(null);
 
   const toggleExpandBin = (binCode: string) => {
     setExpandedBinCodes((prev) => {
@@ -90,6 +126,116 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
     records: PalletRecord[];
   } | null>(null);
 
+  // Open Edit Modal
+  const handleStartEditRecord = (record: PalletRecord) => {
+    const existingBatches = getPalletBatches(record);
+    setEditingRecord({ ...record });
+    setEditBatches(
+      existingBatches.length > 0
+        ? existingBatches.map((b) => ({
+            noBatch: b.noBatch || '',
+            boxAwal: b.boxAwal || '',
+            boxAkhir: b.boxAkhir || '',
+            qtyBox: b.qtyBox
+          }))
+        : [{ noBatch: record.noBatch || '', boxAwal: record.boxAwal || '', boxAkhir: record.boxAkhir || '' }]
+    );
+    setEditError(null);
+  };
+
+  const handleSaveEditRecord = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingRecord || !onUpdateRecord) return;
+    setEditError(null);
+
+    const noPalletClean = (editingRecord.nomorPallet || '').trim().toUpperCase();
+    const binClean = (editingRecord.lokasiBin || '').trim().toUpperCase();
+    const namaClean = (editingRecord.namaBarang || '').trim();
+    const kodeClean = (editingRecord.kodeItem || '').trim().toUpperCase();
+    const qtyNum = Number(editingRecord.qtyPallet);
+
+    if (!noPalletClean) {
+      setEditError('Nomor Pallet wajib diisi.');
+      return;
+    }
+    if (!binClean) {
+      setEditError('Lokasi Bin wajib diisi.');
+      return;
+    }
+    if (!namaClean) {
+      setEditError('Nama Barang wajib diisi.');
+      return;
+    }
+    if (isNaN(qtyNum) || qtyNum <= 0) {
+      setEditError('Qty / Pallet harus lebih dari 0.');
+      return;
+    }
+    if (editBatches.length === 0) {
+      setEditError('Minimal harus ada 1 Batch pada pallet ini.');
+      return;
+    }
+
+    const cleanedBatches: PalletBatchEntry[] = [];
+    for (let i = 0; i < editBatches.length; i++) {
+      const b = editBatches[i];
+      const nb = (b.noBatch || '').trim().toUpperCase();
+      const ba = (b.boxAwal || '').trim().toUpperCase();
+      const bk = (b.boxAkhir || '').trim().toUpperCase();
+      if (!nb) {
+        setEditError(`Batch #${i + 1}: No. Batch wajib diisi.`);
+        return;
+      }
+      if (!ba || !bk) {
+        setEditError(`Batch #${i + 1}: No. Box Awal & No. Box Akhir wajib diisi.`);
+        return;
+      }
+      const calc = calculateBatchBoxCount(ba, bk);
+      cleanedBatches.push({
+        noBatch: nb,
+        boxAwal: ba,
+        boxAkhir: bk,
+        ...(calc?.isValid ? { qtyBox: calc.totalBox } : {})
+      });
+    }
+
+    const combinedNoBatch = cleanedBatches.map((b) => b.noBatch).join(', ');
+    const firstBatch = cleanedBatches[0];
+    const originalRecord = records.find((r) => r.id === editingRecord.id);
+    const binChanged =
+      originalRecord && originalRecord.lokasiBin.toUpperCase() !== binClean;
+
+    const updated: PalletRecord = {
+      ...editingRecord,
+      nomorPallet: noPalletClean,
+      lokasiBin: binClean,
+      kodeItem: kodeClean,
+      namaBarang: namaClean,
+      qtyPallet: qtyNum,
+      unit: editingRecord.unit || 'Box',
+      noBatch: combinedNoBatch,
+      boxAwal: firstBatch.boxAwal,
+      boxAkhir: firstBatch.boxAkhir,
+      batchAwal: firstBatch.boxAwal,
+      batchAkhir: firstBatch.boxAkhir,
+      batches: cleanedBatches,
+      keterangan: editingRecord.keterangan?.trim() || '',
+      ...(binChanged ? { binOrder: undefined } : {})
+    };
+
+    try {
+      setIsSavingEdit(true);
+      await onUpdateRecord(updated);
+      setEditingRecord(null);
+      setEditSuccessMsg(`Data Pallet ${updated.nomorPallet} (Bin ${updated.lokasiBin}) berhasil diperbarui!`);
+      setTimeout(() => setEditSuccessMsg(null), 4000);
+    } catch (err) {
+      console.error('Gagal menyimpan perubahan pallet:', err);
+      setEditError('Gagal menyimpan perubahan ke database. Silakan coba lagi.');
+    } finally {
+      setIsSavingEdit(false);
+    }
+  };
+
   // Filter records
   const filteredRecords = useMemo(() => {
     return records.filter((item) => {
@@ -104,7 +250,14 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
         (item.boxAwal && item.boxAwal.toLowerCase().includes(q)) ||
         (item.boxAkhir && item.boxAkhir.toLowerCase().includes(q)) ||
         (item.batchAwal && item.batchAwal.toLowerCase().includes(q)) ||
-        (item.batchAkhir && item.batchAkhir.toLowerCase().includes(q));
+        (item.batchAkhir && item.batchAkhir.toLowerCase().includes(q)) ||
+        (item.batches &&
+          item.batches.some(
+            (b) =>
+              b.noBatch.toLowerCase().includes(q) ||
+              b.boxAwal.toLowerCase().includes(q) ||
+              b.boxAkhir.toLowerCase().includes(q)
+          ));
 
       // Filter by Bin or Zone
       let matchBin = true;
@@ -273,10 +426,52 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
     }
   };
 
+  // Reorder pallets inside a specific Bin (used by drag-and-drop and Up/Down buttons)
+  const applyReorderInBin = async (
+    binCode: string,
+    sortedList: PalletRecord[],
+    fromIdx: number,
+    toIdx: number
+  ) => {
+    if (!onReorderPallets || isReordering) return;
+    if (
+      fromIdx === toIdx ||
+      fromIdx < 0 ||
+      toIdx < 0 ||
+      fromIdx >= sortedList.length ||
+      toIdx >= sortedList.length
+    ) {
+      return;
+    }
+    const nextList = [...sortedList];
+    const [moved] = nextList.splice(fromIdx, 1);
+    nextList.splice(toIdx, 0, moved);
+
+    try {
+      setIsReordering(true);
+      await onReorderPallets(nextList);
+      setEditSuccessMsg(
+        `Urutan fisik pallet di Bin ${binCode} berhasil diperbarui (${moved.nomorPallet || moved.barcodeNumber} → posisi #${toIdx + 1})!`
+      );
+      setTimeout(() => setEditSuccessMsg(null), 3500);
+    } catch (err) {
+      console.error('Gagal menyimpan urutan pallet:', err);
+    } finally {
+      setIsReordering(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       {/* Screen Interactive UI */}
       <div className="no-print space-y-5">
+        {editSuccessMsg && (
+          <div className="p-3 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-300 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200 rounded-xl text-xs font-semibold flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span>{editSuccessMsg}</span>
+          </div>
+        )}
+
         {/* Metric Cards Banner */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <div className="p-4 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs">
@@ -620,6 +815,21 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
                   {/* Table of items in this specific bin (Only shown when expanded via Eye button) */}
                   {isExpanded && (
                     <div className="overflow-x-auto border-t border-slate-200 dark:border-slate-800">
+                      {onReorderPallets && sortedItems.length > 1 && (
+                        <div className="px-3.5 py-2 bg-blue-50/70 dark:bg-blue-950/30 border-b border-blue-100 dark:border-blue-900/50 text-[11px] text-blue-800 dark:text-blue-200 flex items-center justify-between gap-2">
+                          <span className="flex items-center gap-1.5 font-medium">
+                            <GripVertical className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                            <span>
+                              Sesuaikan urutan fisik di lapangan: <strong>seret baris pallet (⋮⋮)</strong> atau gunakan tombol <strong>▲ / ▼</strong> di sisi kiri.
+                            </span>
+                          </span>
+                          {isReordering && (
+                            <span className="text-[10px] font-bold text-blue-600 animate-pulse">
+                              Menyimpan urutan...
+                            </span>
+                          )}
+                        </div>
+                      )}
                       <table className="w-full text-left text-xs border-collapse">
                         <thead>
                           <tr className="bg-slate-100/70 dark:bg-slate-800/40 border-b border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300 font-semibold">
@@ -646,6 +856,11 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
                                 )}
                               </button>
                             </th>
+                            {onReorderPallets && (
+                              <th className="py-2.5 px-2 w-20 text-center" title="Seret baris atau klik panah untuk mengubah urutan fisik">
+                                Urut
+                              </th>
+                            )}
                             <th className="py-2.5 px-3 w-10 text-center">No</th>
                             <th className="py-2.5 px-3">No Pallet</th>
                             <th className="py-2.5 px-3">Kode Item</th>
@@ -661,12 +876,63 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
                         <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-mono">
                           {sortedItems.map((item, rowIdx) => {
                             const isSelected = selectedIds.has(item.id);
+                            const canReorder = Boolean(onReorderPallets) && sortedItems.length > 1;
+                            const isDraggingThis =
+                              draggedItem?.id === item.id && draggedItem?.binCode === binGroup.binCode;
+                            const isDropTarget =
+                              dragOverItem?.id === item.id &&
+                              dragOverItem?.binCode === binGroup.binCode &&
+                              draggedItem?.id !== item.id &&
+                              draggedItem?.binCode === binGroup.binCode;
 
                             return (
                               <tr
                                 key={item.id}
-                                className={`hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors ${
-                                  isSelected ? 'bg-blue-50/50 dark:bg-blue-950/20' : ''
+                                draggable={canReorder}
+                                onDragStart={(e) => {
+                                  if (!canReorder) return;
+                                  setDraggedItem({ id: item.id, binCode: binGroup.binCode });
+                                  e.dataTransfer.effectAllowed = 'move';
+                                  e.dataTransfer.setData('text/plain', item.id);
+                                }}
+                                onDragOver={(e) => {
+                                  if (!canReorder || !draggedItem || draggedItem.binCode !== binGroup.binCode) {
+                                    return;
+                                  }
+                                  e.preventDefault();
+                                  e.dataTransfer.dropEffect = 'move';
+                                  if (dragOverItem?.id !== item.id || dragOverItem?.binCode !== binGroup.binCode) {
+                                    setDragOverItem({ id: item.id, binCode: binGroup.binCode });
+                                  }
+                                }}
+                                onDragLeave={() => {
+                                  if (dragOverItem?.id === item.id && dragOverItem?.binCode === binGroup.binCode) {
+                                    setDragOverItem(null);
+                                  }
+                                }}
+                                onDrop={async (e) => {
+                                  e.preventDefault();
+                                  const activeDrag = draggedItem;
+                                  setDraggedItem(null);
+                                  setDragOverItem(null);
+                                  if (!activeDrag || activeDrag.binCode !== binGroup.binCode) return;
+                                  const fromIdx = sortedItems.findIndex((x) => x.id === activeDrag.id);
+                                  if (fromIdx !== -1 && fromIdx !== rowIdx) {
+                                    await applyReorderInBin(binGroup.binCode, sortedItems, fromIdx, rowIdx);
+                                  }
+                                }}
+                                onDragEnd={() => {
+                                  setDraggedItem(null);
+                                  setDragOverItem(null);
+                                }}
+                                className={`transition-colors ${
+                                  isDraggingThis
+                                    ? 'opacity-45 bg-blue-50/70 dark:bg-blue-950/30'
+                                    : isDropTarget
+                                    ? 'bg-blue-50 dark:bg-blue-950/50 ring-2 ring-inset ring-blue-500'
+                                    : isSelected
+                                    ? 'bg-blue-50/50 dark:bg-blue-950/20 hover:bg-blue-50/80'
+                                    : 'hover:bg-slate-50/80 dark:hover:bg-slate-800/40'
                                 }`}
                               >
                                 <td className="py-2.5 px-3 text-center">
@@ -682,6 +948,46 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
                                     )}
                                   </button>
                                 </td>
+                                {onReorderPallets && (
+                                  <td className="py-2 px-2 text-center font-sans">
+                                    <div className="inline-flex items-center gap-0.5">
+                                      <span
+                                        className={`p-1 rounded ${
+                                          canReorder
+                                            ? 'cursor-grab active:cursor-grabbing text-slate-400 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/40'
+                                            : 'text-slate-200 dark:text-slate-700'
+                                        }`}
+                                        title={canReorder ? 'Seret untuk pindah urutan pallet' : 'Hanya 1 pallet di bin'}
+                                      >
+                                        <GripVertical className="w-4 h-4" />
+                                      </span>
+                                      <button
+                                        type="button"
+                                        disabled={!canReorder || rowIdx === 0 || isReordering}
+                                        onClick={() =>
+                                          applyReorderInBin(binGroup.binCode, sortedItems, rowIdx, rowIdx - 1)
+                                        }
+                                        className="p-0.5 rounded text-slate-500 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/40 disabled:opacity-25 disabled:cursor-not-allowed cursor-pointer"
+                                        title="Naikkan 1 posisi"
+                                      >
+                                        <ArrowUp className="w-3.5 h-3.5" />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        disabled={
+                                          !canReorder || rowIdx === sortedItems.length - 1 || isReordering
+                                        }
+                                        onClick={() =>
+                                          applyReorderInBin(binGroup.binCode, sortedItems, rowIdx, rowIdx + 1)
+                                        }
+                                        className="p-0.5 rounded text-slate-500 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/40 disabled:opacity-25 disabled:cursor-not-allowed cursor-pointer"
+                                        title="Turunkan 1 posisi"
+                                      >
+                                        <ArrowDown className="w-3.5 h-3.5" />
+                                      </button>
+                                    </div>
+                                  </td>
+                                )}
                                 <td className="py-2.5 px-3 text-center font-bold text-slate-500 font-mono">
                                   {rowIdx + 1}
                                 </td>
@@ -716,10 +1022,39 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
                                   </span>
                                 </td>
                                 <td className="py-2.5 px-3 font-bold text-blue-700 dark:text-blue-400">
-                                  {item.noBatch || '-'}
+                                  {(() => {
+                                    const batches = getPalletBatches(item);
+                                    if (batches.length > 1) {
+                                      return (
+                                        <div className="space-y-0.5">
+                                          {batches.map((b, bIdx) => (
+                                            <div key={bIdx} className="whitespace-nowrap">
+                                              <span className="text-[10px] text-slate-400 mr-1">#{bIdx + 1}</span>
+                                              {b.noBatch || '-'}
+                                            </div>
+                                          ))}
+                                        </div>
+                                      );
+                                    }
+                                    return item.noBatch || '-';
+                                  })()}
                                 </td>
                                 <td className="py-2.5 px-3 text-[11px] text-slate-600 dark:text-slate-400">
-                                  {item.boxAwal || item.batchAwal || '-'} - {item.boxAkhir || item.batchAkhir || '-'}
+                                  {(() => {
+                                    const batches = getPalletBatches(item);
+                                    if (batches.length > 1) {
+                                      return (
+                                        <div className="space-y-0.5">
+                                          {batches.map((b, bIdx) => (
+                                            <div key={bIdx} className="whitespace-nowrap">
+                                              {b.boxAwal || '-'} - {b.boxAkhir || '-'}
+                                            </div>
+                                          ))}
+                                        </div>
+                                      );
+                                    }
+                                    return `${item.boxAwal || item.batchAwal || '-'} - ${item.boxAkhir || item.batchAkhir || '-'}`;
+                                  })()}
                                 </td>
                                 <td className="py-2.5 px-3 text-[11px] text-slate-800 dark:text-slate-200 font-bold">
                                   {item.barcodeNumber}
@@ -734,6 +1069,16 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
                                 </td>
                                 <td className="py-2.5 px-3 text-center font-sans">
                                   <div className="flex items-center justify-center gap-1.5">
+                                    {onUpdateRecord && (
+                                      <button
+                                        type="button"
+                                        onClick={() => handleStartEditRecord(item)}
+                                        className="p-1.5 text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/50 rounded-lg transition-colors cursor-pointer"
+                                        title="Edit data pallet (No. Box, Lokasi Bin, Batch)"
+                                      >
+                                        <Edit3 className="w-3.5 h-3.5" />
+                                      </button>
+                                    )}
                                     <button
                                       type="button"
                                       onClick={() => handlePrintRecord(item)}
@@ -866,10 +1211,39 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
                         <span className="text-[11px] font-normal text-slate-500 font-sans">{item.unit}</span>
                       </td>
                       <td className="py-3 px-3 font-bold text-blue-700 dark:text-blue-400">
-                        {item.noBatch || '-'}
+                        {(() => {
+                          const batches = getPalletBatches(item);
+                          if (batches.length > 1) {
+                            return (
+                              <div className="space-y-0.5">
+                                {batches.map((b, bIdx) => (
+                                  <div key={bIdx} className="whitespace-nowrap">
+                                    <span className="text-[10px] text-slate-400 mr-1">#{bIdx + 1}</span>
+                                    {b.noBatch || '-'}
+                                  </div>
+                                ))}
+                              </div>
+                            );
+                          }
+                          return item.noBatch || '-';
+                        })()}
                       </td>
                       <td className="py-3 px-3 text-[11px] text-slate-600 dark:text-slate-400">
-                        {item.boxAwal || item.batchAwal || '-'} - {item.boxAkhir || item.batchAkhir || '-'}
+                        {(() => {
+                          const batches = getPalletBatches(item);
+                          if (batches.length > 1) {
+                            return (
+                              <div className="space-y-0.5">
+                                {batches.map((b, bIdx) => (
+                                  <div key={bIdx} className="whitespace-nowrap">
+                                    {b.boxAwal || '-'} - {b.boxAkhir || '-'}
+                                  </div>
+                                ))}
+                              </div>
+                            );
+                          }
+                          return `${item.boxAwal || item.batchAwal || '-'} - ${item.boxAkhir || item.batchAkhir || '-'}`;
+                        })()}
                       </td>
                       <td className="py-3 px-3 text-slate-500 text-[11px] font-sans">
                         {new Date(item.submittedAt).toLocaleDateString('id-ID', {
@@ -881,6 +1255,16 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
                       </td>
                       <td className="py-3 px-3 text-center font-sans">
                         <div className="flex items-center justify-center gap-1.5">
+                          {onUpdateRecord && (
+                            <button
+                              type="button"
+                              onClick={() => handleStartEditRecord(item)}
+                              className="p-1.5 text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/50 rounded-lg transition-colors cursor-pointer"
+                              title="Edit data pallet (No. Box, Lokasi Bin, Batch)"
+                            >
+                              <Edit3 className="w-4 h-4" />
+                            </button>
+                          )}
                           <button
                             type="button"
                             onClick={() => handlePrintRecord(item)}
@@ -917,6 +1301,419 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
         )}
       </div>
 
+      {/* Edit Data Pallet Modal */}
+      {editingRecord && (
+        <div className="no-print fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-3 sm:p-5 overflow-y-auto">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl max-w-3xl w-full border border-slate-200 dark:border-slate-800 shadow-2xl p-5 sm:p-6 my-auto space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-slate-800">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-300 rounded-xl">
+                  <Edit3 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                    Edit Data Pallet ({editingRecord.nomorPallet || editingRecord.barcodeNumber})
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Ubah Nomor Box, Lokasi Bin, Qty, atau tambahkan hingga 2+ Batch dalam 1 Pallet
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingRecord(null)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveEditRecord} className="space-y-4 text-xs">
+              {editError && (
+                <div className="p-2.5 rounded-lg bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 flex items-center gap-2 font-medium">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{editError}</span>
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
+                <div className="sm:col-span-4">
+                  <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
+                    No Pallet *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={editingRecord.nomorPallet}
+                    onChange={(e) =>
+                      setEditingRecord({
+                        ...editingRecord,
+                        nomorPallet: e.target.value.toUpperCase()
+                      })
+                    }
+                    className="w-full font-mono font-bold bg-amber-50/70 dark:bg-amber-950/30 border border-amber-300 dark:border-amber-800 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-100"
+                  />
+                </div>
+
+                <div className="sm:col-span-4">
+                  <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
+                    Lokasi Bin *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={editingRecord.lokasiBin}
+                    onChange={(e) =>
+                      setEditingRecord({
+                        ...editingRecord,
+                        lokasiBin: e.target.value.toUpperCase()
+                      })
+                    }
+                    placeholder="Contoh: 5A.1"
+                    className="w-full font-mono font-extrabold text-blue-700 dark:text-blue-300 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2"
+                  />
+                </div>
+
+                <div className="sm:col-span-4">
+                  <label className="block font-semibold text-slate-600 dark:text-slate-400 mb-1">
+                    Pilih Cepat Lokasi Bin
+                  </label>
+                  <select
+                    value={
+                      GUDANG5_SLOTS_A.includes(editingRecord.lokasiBin) ||
+                      GUDANG5_SLOTS_B.includes(editingRecord.lokasiBin)
+                        ? editingRecord.lokasiBin
+                        : ''
+                    }
+                    onChange={(e) => {
+                      if (e.target.value) {
+                        setEditingRecord({
+                          ...editingRecord,
+                          lokasiBin: e.target.value
+                        });
+                      }
+                    }}
+                    className="w-full font-mono bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-2.5 py-2 text-slate-800 dark:text-slate-200"
+                  >
+                    <option value="">-- Pilih Bin Gudang 5 --</option>
+                    <optgroup label="Sisi Kiri (5A.1 - 5A.50)">
+                      {GUDANG5_SLOTS_A.map((b) => (
+                        <option key={b} value={b}>
+                          Bin {b}
+                        </option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="Sisi Kanan (5B.1 - 5B.50)">
+                      {GUDANG5_SLOTS_B.map((b) => (
+                        <option key={b} value={b}>
+                          Bin {b}
+                        </option>
+                      ))}
+                    </optgroup>
+                  </select>
+                </div>
+
+                {masterItems.length > 0 && (
+                  <div className="sm:col-span-12">
+                    <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      Pilih dari Master Barang (Opsional)
+                    </label>
+                    <select
+                      value={
+                        masterItems.find(
+                          (m) =>
+                            m.kodeItem === editingRecord.kodeItem &&
+                            m.namaBarang === editingRecord.namaBarang
+                        )?.id || ''
+                      }
+                      onChange={(e) => {
+                        const found = masterItems.find((m) => m.id === e.target.value);
+                        if (found) {
+                          setEditingRecord({
+                            ...editingRecord,
+                            kodeItem: found.kodeItem,
+                            namaBarang: found.namaBarang,
+                            unit: found.satuan || editingRecord.unit || 'Box'
+                          });
+                        }
+                      }}
+                      className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-100"
+                    >
+                      <option value="">-- Pertahankan / Isi Manual di Bawah --</option>
+                      {masterItems.map((m) => (
+                        <option key={m.id} value={m.id}>
+                          [{m.kodeItem}] {m.namaBarang}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                <div className="sm:col-span-4">
+                  <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    Kode Item
+                  </label>
+                  <input
+                    type="text"
+                    value={editingRecord.kodeItem}
+                    onChange={(e) =>
+                      setEditingRecord({
+                        ...editingRecord,
+                        kodeItem: e.target.value.toUpperCase()
+                      })
+                    }
+                    className="w-full font-mono font-bold text-blue-700 dark:text-blue-300 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2"
+                  />
+                </div>
+
+                <div className="sm:col-span-5">
+                  <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    Nama Barang *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={editingRecord.namaBarang}
+                    onChange={(e) =>
+                      setEditingRecord({
+                        ...editingRecord,
+                        namaBarang: e.target.value
+                      })
+                    }
+                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-100 font-medium"
+                  />
+                </div>
+
+                <div className="sm:col-span-3">
+                  <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    Qty / Pallet *
+                  </label>
+                  <div className="flex gap-1.5">
+                    <input
+                      type="number"
+                      min={1}
+                      required
+                      value={editingRecord.qtyPallet}
+                      onChange={(e) =>
+                        setEditingRecord({
+                          ...editingRecord,
+                          qtyPallet: Number(e.target.value) || 0
+                        })
+                      }
+                      className="w-full font-mono font-bold bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-2.5 py-2 text-slate-900 dark:text-slate-100"
+                    />
+                    <select
+                      value={editingRecord.unit || 'Box'}
+                      onChange={(e) =>
+                        setEditingRecord({
+                          ...editingRecord,
+                          unit: e.target.value
+                        })
+                      }
+                      className="bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-2 py-2 text-slate-800 dark:text-slate-200"
+                    >
+                      {COMMON_UNITS.map((u) => (
+                        <option key={u} value={u}>
+                          {u}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              {/* Batches & Box Ranges Section */}
+              <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 space-y-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <span className="font-bold text-slate-800 dark:text-slate-200">
+                      Daftar Batch &amp; Nomor Box dalam Pallet Ini ({editBatches.length} Batch)
+                    </span>
+                    <p className="text-[11px] text-slate-500">
+                      Edit No. Batch / No. Box Awal &amp; Akhir, atau tambah batch ke-2 dalam 1 pallet
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setEditBatches((prev) => [
+                        ...prev,
+                        { noBatch: '', boxAwal: '', boxAkhir: '' }
+                      ])
+                    }
+                    className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-blue-50 dark:bg-blue-950/60 hover:bg-blue-100 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 font-bold text-[11px] cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Tambah Batch</span>
+                  </button>
+                </div>
+
+                <div className="space-y-2">
+                  {editBatches.map((eb, bIdx) => {
+                    const bCalc = calculateBatchBoxCount(eb.boxAwal, eb.boxAkhir);
+                    return (
+                      <div
+                        key={bIdx}
+                        className="p-2.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 grid grid-cols-1 sm:grid-cols-12 gap-2 items-end"
+                      >
+                        <div className="sm:col-span-2 flex items-center gap-1.5 self-center">
+                          <span className="px-2 py-0.5 rounded bg-slate-800 dark:bg-blue-600 text-white font-mono font-bold text-[11px]">
+                            Batch #{bIdx + 1}
+                          </span>
+                          {bCalc?.isValid && (
+                            <span className="text-[10px] font-mono font-bold text-emerald-600">
+                              ({bCalc.totalBox} Box)
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="sm:col-span-3">
+                          <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-0.5">
+                            No. Batch *
+                          </label>
+                          <input
+                            type="text"
+                            required
+                            value={eb.noBatch}
+                            onChange={(e) =>
+                              setEditBatches((prev) =>
+                                prev.map((item, idx) =>
+                                  idx === bIdx
+                                    ? { ...item, noBatch: e.target.value.toUpperCase() }
+                                    : item
+                                )
+                              )
+                            }
+                            className="w-full font-mono bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-900 dark:text-slate-100"
+                          />
+                        </div>
+
+                        <div className="sm:col-span-3">
+                          <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-0.5">
+                            No. Box Awal *
+                          </label>
+                          <input
+                            type="text"
+                            required
+                            value={eb.boxAwal}
+                            onChange={(e) =>
+                              setEditBatches((prev) =>
+                                prev.map((item, idx) =>
+                                  idx === bIdx
+                                    ? { ...item, boxAwal: e.target.value.toUpperCase() }
+                                    : item
+                                )
+                              )
+                            }
+                            className="w-full font-mono bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-900 dark:text-slate-100"
+                          />
+                        </div>
+
+                        <div className="sm:col-span-3">
+                          <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-0.5">
+                            No. Box Akhir *
+                          </label>
+                          <input
+                            type="text"
+                            required
+                            value={eb.boxAkhir}
+                            onChange={(e) =>
+                              setEditBatches((prev) =>
+                                prev.map((item, idx) =>
+                                  idx === bIdx
+                                    ? { ...item, boxAkhir: e.target.value.toUpperCase() }
+                                    : item
+                                )
+                              )
+                            }
+                            className="w-full font-mono bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-900 dark:text-slate-100"
+                          />
+                        </div>
+
+                        <div className="sm:col-span-1 flex justify-end">
+                          {editBatches.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setEditBatches((prev) => prev.filter((_, idx) => idx !== bIdx))
+                              }
+                              className="p-1.5 text-red-500 hover:bg-red-50 dark:hover:bg-red-950/40 rounded-lg cursor-pointer"
+                              title={`Hapus Batch #${bIdx + 1}`}
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {(() => {
+                  const totalBoxSum = editBatches.reduce((sum, b) => {
+                    const c = calculateBatchBoxCount(b.boxAwal, b.boxAkhir);
+                    return sum + (c?.isValid ? c.totalBox : 0);
+                  }, 0);
+                  if (totalBoxSum > 0 && totalBoxSum !== Number(editingRecord.qtyPallet)) {
+                    return (
+                      <div className="flex items-center justify-between pt-1 text-[11px]">
+                        <span className="text-slate-600 dark:text-slate-400">
+                          Total hitungan rentang No. Box: <strong className="text-emerald-700 dark:text-emerald-300">{totalBoxSum} Box</strong>
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setEditingRecord({ ...editingRecord, qtyPallet: totalBoxSum })
+                          }
+                          className="px-2.5 py-1 rounded bg-blue-50 dark:bg-blue-950 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 font-bold cursor-pointer"
+                        >
+                          ← Terapkan Total ({totalBoxSum} Box) ke Qty
+                        </button>
+                      </div>
+                    );
+                  }
+                  return null;
+                })()}
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  Keterangan / Catatan
+                </label>
+                <input
+                  type="text"
+                  value={editingRecord.keterangan || ''}
+                  onChange={(e) =>
+                    setEditingRecord({ ...editingRecord, keterangan: e.target.value })
+                  }
+                  placeholder="Catatan opsional"
+                  className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-100"
+                />
+              </div>
+
+              <div className="pt-3 border-t border-slate-200 dark:border-slate-800 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setEditingRecord(null)}
+                  disabled={isSavingEdit}
+                  className="px-4 py-2 rounded-lg text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 font-semibold cursor-pointer"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingEdit}
+                  className="flex items-center gap-1.5 px-5 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-bold shadow-sm transition-colors disabled:opacity-50 cursor-pointer"
+                >
+                  <Save className="w-4 h-4" />
+                  <span>{isSavingEdit ? 'Menyimpan...' : 'Simpan Perubahan'}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* Print & PDF Modal for Pallet Thermal Labels */}
       <PrintLabelModal
         isOpen={isPrintModalOpen}
@@ -930,7 +1727,11 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
           isOpen={true}
           onClose={() => setBinManifestTarget(null)}
           binCode={binManifestTarget.binCode}
-          records={binManifestTarget.records}
+          records={
+            groupedBins.find((g) => g.binCode === binManifestTarget.binCode)?.items ??
+            binManifestTarget.records
+          }
+          onReorderPallets={onReorderPallets}
           onProcessOutbound={onProcessOutbound}
           onRestoreOutbound={onRestoreOutbound}
         />

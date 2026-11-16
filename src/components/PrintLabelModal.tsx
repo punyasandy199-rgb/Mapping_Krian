@@ -1,7 +1,11 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { PalletRecord } from '../types/warehouse';
 import { ThermalLabelCard } from './ThermalLabelCard';
-import { downloadPalletLabelPdf, downloadPalletHistoryReportPdf } from '../utils/pdfGenerator';
+import {
+  downloadPalletLabelPdf,
+  downloadPalletHistoryReportPdf,
+  generatePalletLabelPdfDoc
+} from '../utils/pdfGenerator';
 import {
   Printer,
   FileDown,
@@ -10,9 +14,8 @@ import {
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
-  Layers,
-  Sparkles,
-  ExternalLink
+  ExternalLink,
+  AlertCircle
 } from 'lucide-react';
 
 interface PrintLabelModalProps {
@@ -29,14 +32,65 @@ export const PrintLabelModal: React.FC<PrintLabelModalProps> = ({
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
   const [downloadSuccess, setDownloadSuccess] = useState<string | null>(null);
+  const [printFallbackUrl, setPrintFallbackUrl] = useState<string | null>(null);
+  const [printNotice, setPrintNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (printFallbackUrl) URL.revokeObjectURL(printFallbackUrl);
+    };
+  }, [printFallbackUrl]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setPrintFallbackUrl(null);
+      setPrintNotice(null);
+    }
+  }, [isOpen]);
 
   if (!isOpen || records.length === 0) return null;
 
   const currentRecord = records[Math.min(currentIndex, records.length - 1)];
 
-  const handlePrintPrinter = () => {
-    // Triggers native printer dialog
-    window.print();
+  const handlePrintPrinter = async () => {
+    let printDialogOpened = false;
+    const onBeforePrint = () => {
+      printDialogOpened = true;
+    };
+    window.addEventListener('beforeprint', onBeforePrint);
+    try {
+      window.print();
+    } catch {
+      printDialogOpened = false;
+    } finally {
+      window.removeEventListener('beforeprint', onBeforePrint);
+    }
+
+    if (!printDialogOpened) {
+      try {
+        setIsGeneratingPdf(true);
+        const doc = await generatePalletLabelPdfDoc(records, true);
+        if (printFallbackUrl) URL.revokeObjectURL(printFallbackUrl);
+        const blobUrl = URL.createObjectURL(doc.output('blob'));
+        setPrintFallbackUrl(blobUrl);
+        setPrintNotice(
+          'Browser preview membatasi cetak langsung. Label PDF siap cetak telah disiapkan di tab baru atau bisa diunduh.'
+        );
+        const link = document.createElement('a');
+        link.href = blobUrl;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.style.display = 'none';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      } catch (err) {
+        console.error(err);
+        setPrintNotice('Gagal membuka dialog printer. Gunakan tombol Unduh PDF Label.');
+      } finally {
+        setIsGeneratingPdf(false);
+      }
+    }
   };
 
   const handleDownloadSinglePdf = async () => {
@@ -146,6 +200,27 @@ export const PrintLabelModal: React.FC<PrintLabelModalProps> = ({
             </div>
           )}
 
+          {/* Print fallback notice */}
+          {printNotice && (
+            <div className="p-3 bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 text-amber-900 dark:text-amber-200 rounded-xl text-xs flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                <span>{printNotice}</span>
+              </div>
+              {printFallbackUrl && (
+                <a
+                  href={printFallbackUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-semibold"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span>Buka &amp; Cetak di Tab Baru</span>
+                </a>
+              )}
+            </div>
+          )}
+
           {/* Label Thermal Preview Card */}
           <div className="flex justify-center bg-slate-100 dark:bg-slate-950/70 p-4 rounded-xl border border-dashed border-slate-300 dark:border-slate-800 overflow-x-auto">
             <div className="scale-95 sm:scale-100 origin-top">
@@ -216,7 +291,8 @@ export const PrintLabelModal: React.FC<PrintLabelModalProps> = ({
             <button
               type="button"
               onClick={handlePrintPrinter}
-              className="flex items-center gap-1.5 px-4 py-2 text-xs font-bold text-white bg-slate-900 hover:bg-slate-800 rounded-lg shadow-sm transition-all"
+              disabled={isGeneratingPdf}
+              className="flex items-center gap-1.5 px-4 py-2 text-xs font-bold text-white bg-slate-900 hover:bg-slate-800 rounded-lg shadow-sm transition-all cursor-pointer disabled:opacity-50"
             >
               <Printer className="w-4 h-4" />
               <span>Cetak ke Printer</span>

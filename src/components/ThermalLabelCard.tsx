@@ -3,6 +3,7 @@ import { PalletRecord } from '../types/warehouse';
 import { BarcodeRenderer } from './BarcodeRenderer';
 import { QrCodeRenderer } from './QrCodeRenderer';
 import { downloadPalletLabelPdf } from '../utils/pdfGenerator';
+import { getPalletBatches } from '../utils/batchCalculator';
 import { Printer, Copy, Check, MapPin, Layers, Calendar, Hash, Tag, Box, FileDown } from 'lucide-react';
 
 interface ThermalLabelCardProps {
@@ -123,39 +124,70 @@ export const ThermalLabelCard: React.FC<ThermalLabelCardProps> = ({
         </div>
 
         {/* No. Batch & No. Box Range */}
-        <div className="bg-slate-50 border border-slate-200 rounded p-2 mb-3">
-          {/* No. Batch */}
-          <div className="flex items-center justify-between pb-1.5 mb-1.5 border-b border-slate-200">
-            <span className="text-[10px] font-bold uppercase text-slate-500 flex items-center gap-1">
-              <Hash className="w-3 h-3 text-slate-400" /> NO. BATCH:
-            </span>
-            <span className="text-xs font-mono font-black text-blue-700 bg-white px-2 py-0.5 rounded border border-blue-200">
-              {record.noBatch || '-'}
-            </span>
-          </div>
+        {(() => {
+          const batches = getPalletBatches(record);
+          if (batches.length > 1) {
+            return (
+              <div className="bg-slate-50 border border-slate-200 rounded p-2 mb-3 space-y-1.5">
+                <div className="flex items-center justify-between border-b border-slate-200 pb-1">
+                  <span className="text-[10px] font-bold uppercase text-slate-500 flex items-center gap-1">
+                    <Hash className="w-3 h-3 text-slate-400" /> {batches.length} BATCH DALAM PALLET INI
+                  </span>
+                </div>
+                <div className="space-y-1">
+                  {batches.map((b, bIdx) => (
+                    <div
+                      key={bIdx}
+                      className="flex items-center justify-between text-[11px] font-mono bg-white px-2 py-1 rounded border border-slate-200"
+                    >
+                      <span className="font-black text-blue-700">
+                        #{bIdx + 1}: {b.noBatch || '-'}
+                      </span>
+                      <span className="font-bold text-slate-800">
+                        Box {b.boxAwal || '-'} s/d {b.boxAkhir || '-'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          }
+          return (
+            <div className="bg-slate-50 border border-slate-200 rounded p-2 mb-3">
+              {/* No. Batch */}
+              <div className="flex items-center justify-between pb-1.5 mb-1.5 border-b border-slate-200">
+                <span className="text-[10px] font-bold uppercase text-slate-500 flex items-center gap-1">
+                  <Hash className="w-3 h-3 text-slate-400" /> NO. BATCH:
+                </span>
+                <span className="text-xs font-mono font-black text-blue-700 bg-white px-2 py-0.5 rounded border border-blue-200">
+                  {record.noBatch || '-'}
+                </span>
+              </div>
 
-          {/* Rentang No. Box */}
-          <div>
-            <div className="text-[10px] font-bold uppercase text-slate-500 flex items-center gap-1 mb-1">
-              <Box className="w-3 h-3 text-slate-400" /> RENTANG NO. BOX
-            </div>
-            <div className="flex items-center justify-between text-xs font-mono font-bold text-slate-900">
+              {/* Rentang No. Box */}
               <div>
-                <span className="text-[10px] font-normal text-slate-500 block">No. Box Awal</span>
-                <span className="bg-white px-2 py-0.5 rounded border border-slate-300">
-                  {record.boxAwal || record.batchAwal || '-'}
-                </span>
-              </div>
-              <span className="text-slate-400 font-normal">s/d</span>
-              <div>
-                <span className="text-[10px] font-normal text-slate-500 block text-right">No. Box Akhir</span>
-                <span className="bg-white px-2 py-0.5 rounded border border-slate-300">
-                  {record.boxAkhir || record.batchAkhir || '-'}
-                </span>
+                <div className="text-[10px] font-bold uppercase text-slate-500 flex items-center gap-1 mb-1">
+                  <Box className="w-3 h-3 text-slate-400" /> RENTANG NO. BOX
+                </div>
+                <div className="flex items-center justify-between text-xs font-mono font-bold text-slate-900">
+                  <div>
+                    <span className="text-[10px] font-normal text-slate-500 block">No. Box Awal</span>
+                    <span className="bg-white px-2 py-0.5 rounded border border-slate-300">
+                      {record.boxAwal || record.batchAwal || '-'}
+                    </span>
+                  </div>
+                  <span className="text-slate-400 font-normal">s/d</span>
+                  <div>
+                    <span className="text-[10px] font-normal text-slate-500 block text-right">No. Box Akhir</span>
+                    <span className="bg-white px-2 py-0.5 rounded border border-slate-300">
+                      {record.boxAkhir || record.batchAkhir || '-'}
+                    </span>
+                  </div>
+                </div>
               </div>
             </div>
-          </div>
-        </div>
+          );
+        })()}
 
         {record.keterangan && (
           <div className="text-[11px] text-slate-600 mb-2 italic">

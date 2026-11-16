@@ -1,9 +1,10 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { PalletRecord, OUTBOUND_DESTINATIONS, OutboundDestination } from '../types/warehouse';
 import { QrCodeRenderer } from './QrCodeRenderer';
 import { downloadBinManifestPdf, openBinManifestPdfInNewTab } from '../utils/pdfGenerator';
 import { exportPalletsToCsv } from '../utils/exporter';
 import { sortBinRecordsByLoadingOrder } from '../utils/binSorting';
+import { getPalletBatches } from '../utils/batchCalculator';
 import {
   Printer,
   FileDown,
@@ -16,7 +17,10 @@ import {
   Truck,
   Clock,
   MapPin,
-  Check
+  Check,
+  GripVertical,
+  ArrowUp,
+  ArrowDown
 } from 'lucide-react';
 
 interface PrintBinManifestModalProps {
@@ -24,6 +28,7 @@ interface PrintBinManifestModalProps {
   onClose: () => void;
   binCode: string;
   records: PalletRecord[];
+  onReorderPallets?: (orderedRecords: PalletRecord[]) => Promise<void> | void;
   onProcessOutbound?: (palletIds: string[], destination: string, petugas?: string) => Promise<void> | void;
   onRestoreOutbound?: (palletIds: string[]) => Promise<void> | void;
 }
@@ -33,11 +38,22 @@ export const PrintBinManifestModal: React.FC<PrintBinManifestModalProps> = ({
   onClose,
   binCode,
   records,
+  onReorderPallets,
   onProcessOutbound,
   onRestoreOutbound
 }) => {
   const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [printFallbackUrl, setPrintFallbackUrl] = useState<string | null>(null);
+  const [draggedId, setDraggedId] = useState<string | null>(null);
+  const [dragOverId, setDragOverId] = useState<string | null>(null);
+  const [isReordering, setIsReordering] = useState(false);
+
+  useEffect(() => {
+    return () => {
+      if (printFallbackUrl) URL.revokeObjectURL(printFallbackUrl);
+    };
+  }, [printFallbackUrl]);
 
   // Outbound / Pengambilan Produk states
   const [selectedPalletIds, setSelectedPalletIds] = useState<Set<string>>(new Set());
@@ -145,8 +161,36 @@ export const PrintBinManifestModal: React.FC<PrintBinManifestModalProps> = ({
     }
   };
 
-  const handlePrint = () => {
-    window.print();
+  const handlePrint = async () => {
+    let printDialogOpened = false;
+    const onBeforePrint = () => {
+      printDialogOpened = true;
+    };
+    window.addEventListener('beforeprint', onBeforePrint);
+    try {
+      window.print();
+    } catch {
+      printDialogOpened = false;
+    } finally {
+      window.removeEventListener('beforeprint', onBeforePrint);
+    }
+
+    if (!printDialogOpened) {
+      try {
+        setIsExportingPdf(true);
+        if (printFallbackUrl) URL.revokeObjectURL(printFallbackUrl);
+        const url = await openBinManifestPdfInNewTab(binCode, records, true);
+        setPrintFallbackUrl(url);
+        setSuccessMessage(
+          `Browser preview membatasi cetak langsung. Kartu Bin PDF siap cetak telah disiapkan!`
+        );
+      } catch (err) {
+        console.error(err);
+        setSuccessMessage('Gunakan tombol Unduh PDF atau Buka File PDF Asli untuk mencetak.');
+      } finally {
+        setIsExportingPdf(false);
+      }
+    }
   };
 
   const handleDownloadPdf = async () => {
@@ -177,6 +221,35 @@ export const PrintBinManifestModal: React.FC<PrintBinManifestModalProps> = ({
 
   const handleExportCsv = () => {
     exportPalletsToCsv(records, `muatan_bin_${binCode.replace('.', '_')}`);
+  };
+
+  const applyActiveReorder = async (fromIdx: number, toIdx: number) => {
+    if (!onReorderPallets || isReordering) return;
+    if (
+      fromIdx === toIdx ||
+      fromIdx < 0 ||
+      toIdx < 0 ||
+      fromIdx >= sortedActiveRecords.length ||
+      toIdx >= sortedActiveRecords.length
+    ) {
+      return;
+    }
+    const nextActive = [...sortedActiveRecords];
+    const [moved] = nextActive.splice(fromIdx, 1);
+    nextActive.splice(toIdx, 0, moved);
+
+    try {
+      setIsReordering(true);
+      await onReorderPallets(nextActive);
+      setSuccessMessage(
+        `Urutan fisik pallet ${moved.nomorPallet || moved.barcodeNumber} di Bin ${binCode} disimpan ke posisi #${toIdx + 1}!`
+      );
+      setTimeout(() => setSuccessMessage(null), 3500);
+    } catch (err) {
+      console.error('Gagal menyimpan urutan pallet:', err);
+    } finally {
+      setIsReordering(false);
+    }
   };
 
   // Format date helper
@@ -359,6 +432,21 @@ export const PrintBinManifestModal: React.FC<PrintBinManifestModalProps> = ({
             </div>
 
             {/* Table of Active Items (Remaining in Bin) */}
+            {onReorderPallets && sortedActiveRecords.length > 1 && (
+              <div className="print:hidden mb-2 px-3 py-2 bg-blue-50/80 border border-blue-200 rounded-lg text-[11px] text-blue-900 flex items-center justify-between gap-2">
+                <span className="flex items-center gap-1.5 font-medium">
+                  <GripVertical className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                  <span>
+                    Urutan fisik belum sesuai? <strong>Seret baris (⋮⋮)</strong> atau klik <strong>▲ / ▼</strong> untuk mengatur urutan cetak &amp; rak.
+                  </span>
+                </span>
+                {isReordering && (
+                  <span className="text-[10px] font-bold text-blue-600 animate-pulse">
+                    Menyimpan...
+                  </span>
+                )}
+              </div>
+            )}
             <div className="border border-slate-300 rounded-lg overflow-x-auto">
               <table className="w-full text-left border-collapse">
                 <thead className="bg-slate-100 border-y-2 border-slate-900 text-slate-950 font-black text-xs sm:text-sm">
@@ -379,6 +467,11 @@ export const PrintBinManifestModal: React.FC<PrintBinManifestModalProps> = ({
                         )}
                       </button>
                     </th>
+                    {onReorderPallets && (
+                      <th className="py-3 px-2 w-16 text-center border-r border-slate-300 print:hidden">
+                        Urut
+                      </th>
+                    )}
                     <th className="py-3 px-2.5 w-12 text-center border-r border-slate-300">No</th>
                     <th className="py-3 px-3 w-28 border-r border-slate-300">No Pallet</th>
                     <th className="py-3 px-3.5 w-44 border-r border-slate-300">Kode Item</th>
@@ -392,7 +485,7 @@ export const PrintBinManifestModal: React.FC<PrintBinManifestModalProps> = ({
                   {sortedActiveRecords.length === 0 ? (
                     <tr>
                       <td
-                        colSpan={8}
+                        colSpan={onReorderPallets ? 9 : 8}
                         className="py-10 text-center text-slate-500 italic font-sans text-sm bg-slate-50"
                       >
                         {records.length > 0 ? (
@@ -412,13 +505,51 @@ export const PrintBinManifestModal: React.FC<PrintBinManifestModalProps> = ({
                   ) : (
                     sortedActiveRecords.map((r, idx) => {
                       const isSelected = selectedPalletIds.has(r.id);
+                      const canReorder = Boolean(onReorderPallets) && sortedActiveRecords.length > 1;
+                      const isDraggingThis = draggedId === r.id;
+                      const isDropTarget = dragOverId === r.id && draggedId !== r.id;
 
                       return (
                         <tr
                           key={r.id}
+                          draggable={canReorder}
+                          onDragStart={(e) => {
+                            if (!canReorder) return;
+                            setDraggedId(r.id);
+                            e.dataTransfer.effectAllowed = 'move';
+                            e.dataTransfer.setData('text/plain', r.id);
+                          }}
+                          onDragOver={(e) => {
+                            if (!canReorder || !draggedId) return;
+                            e.preventDefault();
+                            e.dataTransfer.dropEffect = 'move';
+                            if (dragOverId !== r.id) setDragOverId(r.id);
+                          }}
+                          onDragLeave={() => {
+                            if (dragOverId === r.id) setDragOverId(null);
+                          }}
+                          onDrop={async (e) => {
+                            e.preventDefault();
+                            const sourceId = draggedId;
+                            setDraggedId(null);
+                            setDragOverId(null);
+                            if (!sourceId) return;
+                            const fromIdx = sortedActiveRecords.findIndex((x) => x.id === sourceId);
+                            if (fromIdx !== -1 && fromIdx !== idx) {
+                              await applyActiveReorder(fromIdx, idx);
+                            }
+                          }}
+                          onDragEnd={() => {
+                            setDraggedId(null);
+                            setDragOverId(null);
+                          }}
                           onClick={() => handleToggleSelectPallet(r.id)}
                           className={`cursor-pointer transition-colors ${
-                            isSelected
+                            isDraggingThis
+                              ? 'opacity-45 bg-blue-50'
+                              : isDropTarget
+                              ? 'bg-blue-100/70 ring-2 ring-inset ring-blue-600'
+                              : isSelected
                               ? 'bg-amber-100/70 font-semibold'
                               : idx % 2 === 0
                               ? 'bg-white hover:bg-slate-50'
@@ -447,6 +578,44 @@ export const PrintBinManifestModal: React.FC<PrintBinManifestModalProps> = ({
                             />
                           </td>
 
+                          {onReorderPallets && (
+                            <td
+                              className="py-2 px-1.5 text-center border-r border-slate-200 print:hidden"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <div className="inline-flex items-center gap-0.5">
+                                <span
+                                  className={`p-1 rounded ${
+                                    canReorder
+                                      ? 'cursor-grab active:cursor-grabbing text-slate-400 hover:text-blue-600 hover:bg-blue-50'
+                                      : 'text-slate-200'
+                                  }`}
+                                  title="Seret untuk pindah urutan pallet"
+                                >
+                                  <GripVertical className="w-4 h-4" />
+                                </span>
+                                <button
+                                  type="button"
+                                  disabled={!canReorder || idx === 0 || isReordering}
+                                  onClick={() => applyActiveReorder(idx, idx - 1)}
+                                  className="p-0.5 rounded text-slate-500 hover:text-blue-600 hover:bg-blue-50 disabled:opacity-25 disabled:cursor-not-allowed cursor-pointer"
+                                  title="Naikkan 1 posisi"
+                                >
+                                  <ArrowUp className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={!canReorder || idx === sortedActiveRecords.length - 1 || isReordering}
+                                  onClick={() => applyActiveReorder(idx, idx + 1)}
+                                  className="p-0.5 rounded text-slate-500 hover:text-blue-600 hover:bg-blue-50 disabled:opacity-25 disabled:cursor-not-allowed cursor-pointer"
+                                  title="Turunkan 1 posisi"
+                                >
+                                  <ArrowDown className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </td>
+                          )}
+
                           <td className="py-3 px-2.5 text-center font-bold text-slate-500 border-r border-slate-200">
                             {idx + 1}
                           </td>
@@ -471,13 +640,41 @@ export const PrintBinManifestModal: React.FC<PrintBinManifestModalProps> = ({
                           </td>
 
                           <td className="py-3 px-3 font-bold text-blue-700 border-r border-slate-200">
-                            {r.noBatch || '-'}
+                            {(() => {
+                              const batches = getPalletBatches(r);
+                              if (batches.length > 1) {
+                                return (
+                                  <div className="space-y-0.5">
+                                    {batches.map((b, bIdx) => (
+                                      <div key={bIdx}>{b.noBatch || '-'}</div>
+                                    ))}
+                                  </div>
+                                );
+                              }
+                              return r.noBatch || '-';
+                            })()}
                           </td>
 
                           <td className="py-3 px-4 text-center font-bold text-slate-900">
-                            {r.boxAwal || r.batchAwal
-                              ? `${r.boxAwal || r.batchAwal} - ${r.boxAkhir || r.batchAkhir}`
-                              : '-'}
+                            {(() => {
+                              const batches = getPalletBatches(r);
+                              if (batches.length > 1) {
+                                return (
+                                  <div className="space-y-0.5">
+                                    {batches.map((b, bIdx) => (
+                                      <div key={bIdx}>
+                                        {b.boxAwal && b.boxAkhir
+                                          ? `${b.boxAwal} - ${b.boxAkhir}`
+                                          : b.boxAwal || b.boxAkhir || '-'}
+                                      </div>
+                                    ))}
+                                  </div>
+                                );
+                              }
+                              return r.boxAwal || r.batchAwal
+                                ? `${r.boxAwal || r.batchAwal} - ${r.boxAkhir || r.batchAkhir}`
+                                : '-';
+                            })()}
                           </td>
                         </tr>
                       );
@@ -544,10 +741,34 @@ export const PrintBinManifestModal: React.FC<PrintBinManifestModalProps> = ({
                             {r.qtyPallet} <span className="font-sans font-normal text-slate-500">{r.unit}</span>
                           </td>
                           <td className="py-2.5 px-3 text-slate-700 border-r border-slate-200">
-                            <div>Batch: <strong className="text-blue-700">{r.noBatch || '-'}</strong></div>
-                            <div className="text-[10px] text-slate-500">
-                              Box: {r.boxAwal || r.batchAwal || '-'} - {r.boxAkhir || r.batchAkhir || '-'}
-                            </div>
+                            {(() => {
+                              const batches = getPalletBatches(r);
+                              if (batches.length > 1) {
+                                return (
+                                  <div className="space-y-0.5">
+                                    {batches.map((b, bIdx) => (
+                                      <div key={bIdx}>
+                                        <strong className="text-blue-700">{b.noBatch || '-'}</strong>{' '}
+                                        <span className="text-[10px] text-slate-500">
+                                          ({b.boxAwal || '-'}-{b.boxAkhir || '-'})
+                                        </span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                );
+                              }
+                              return (
+                                <>
+                                  <div>
+                                    Batch: <strong className="text-blue-700">{r.noBatch || '-'}</strong>
+                                  </div>
+                                  <div className="text-[10px] text-slate-500">
+                                    Box: {r.boxAwal || r.batchAwal || '-'} -{' '}
+                                    {r.boxAkhir || r.batchAkhir || '-'}
+                                  </div>
+                                </>
+                              );
+                            })()}
                           </td>
                           <td className="py-2.5 px-3 border-r border-slate-200 font-sans">
                             <span className="inline-flex items-center gap-1 font-bold px-2 py-0.5 rounded bg-emerald-100 text-emerald-900 border border-emerald-300 text-xs">
@@ -609,10 +830,23 @@ export const PrintBinManifestModal: React.FC<PrintBinManifestModalProps> = ({
               <span>Unduh PDF</span>
             </button>
 
+            {printFallbackUrl && (
+              <a
+                href={printFallbackUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-1.5 px-3 py-2 text-xs font-bold text-amber-800 bg-amber-100 hover:bg-amber-200 border border-amber-300 rounded-lg"
+              >
+                <ExternalLink className="w-3.5 h-3.5" />
+                <span>Buka &amp; Cetak Tab Baru</span>
+              </a>
+            )}
+
             <button
               type="button"
               onClick={handlePrint}
-              className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-white bg-slate-900 hover:bg-slate-800 rounded-lg shadow-xs transition-all"
+              disabled={isExportingPdf}
+              className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-white bg-slate-900 hover:bg-slate-800 rounded-lg shadow-xs transition-all cursor-pointer disabled:opacity-50"
             >
               <Printer className="w-3.5 h-3.5" />
               <span>Cetak ke Printer</span>

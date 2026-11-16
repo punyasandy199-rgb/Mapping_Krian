@@ -4,7 +4,114 @@ export interface MasterItem {
   namaBarang: string;
   satuan: string;
   defaultQty?: number;
+  beratPerBoxKg?: number; // Default 30 Kg per box
   kategori?: string;
+}
+
+export interface MasterRoute {
+  id: string;
+  kodeLokasi: string; // e.g. 'SJA Semarang', 'SJA Sukodono', 'SJA Sepanjang', 'SJA Karawang'
+  namaLokasi: string; // e.g. 'PT. SANTOS JAYA ABADI GUDANG KONVERSI 1 - SEMARANG'
+  alamat: string;
+  tipe?: 'DARI' | 'TUJUAN' | 'KEDUA';
+  tarifDefault?: number; // Tarif pengiriman standar untuk rute ini (Rp)
+  ppnPersen?: number; // PPN standar untuk rute ini (default: 11%)
+}
+
+export interface MasterVendor {
+  id: string;
+  namaVendor: string;
+  kontak?: string;
+  tarifDefault?: number;
+  ppnPersen?: number;
+  keterangan?: string;
+}
+
+// Model Tujuan & Tarif (Multi-Vendor & Asal-Tujuan Bolak-Balik Fleksibel)
+export interface MasterRouteTariff {
+  id: string;
+  ruteAwal: string; // Lokasi Asal
+  ruteTujuan: string; // Lokasi Tujuan
+  alamatTujuan?: string;
+  vendor: string; // Nama Vendor Armada
+  tarif: number; // Tarif Pengiriman (Rp)
+  ppnPersen: number; // PPN % (default: 11)
+  keterangan?: string;
+}
+
+// Master Blacklist (Nopol, Driver, Vendor, atau Pallet bermasalah)
+export interface BlacklistRecord {
+  id: string;
+  tipe: 'NOPOL' | 'DRIVER' | 'VENDOR' | 'PALLET';
+  identifier: string; // Contoh: Nopol B 9999 XYZ atau Nama Driver
+  alasan: string;
+  tanggal: string;
+  status: 'ACTIVE' | 'RESOLVED';
+}
+
+// User Management (Pengguna & Hak Akses Gudang)
+export interface WarehouseUser {
+  id: string;
+  nama: string;
+  username: string;
+  role: 'Super Admin' | 'Warehouse Admin' | 'Operator Lapangan' | 'Supervisor';
+  status: 'Aktif' | 'Nonaktif';
+}
+
+export interface SuratJalanItemLine {
+  kodeItem: string;
+  namaBarang: string;
+  detailBarang: string;
+  qtyBox: number;
+  beratPerBoxKg: number;
+  totalKg: number;
+  nomorPalletList?: string[];
+  noBatchList?: string[];
+}
+
+export interface SuratJalanRecord {
+  id: string;
+  noSuratJalan: string; // e.g. 'FGW/26/XI/032'
+  noDokumen: string; // 'F/SCM/01.08'
+  revNo: string; // '05'
+  halaman: string; // '1/1'
+  berlakuTanggal: string; // '10/10/2026'
+  tanggal: string; // 'YYYY-MM-DD'
+  tanggalPengambilanFormatted: string; // e.g. '11/11/2026'
+  tglJamCetakCustom?: string; // Input khusus tanggal & jam cetak (opsional)
+  waktuCetakFormatted?: string; // Timestamp cetak yang dicetak di surat jalan
+  noPolisi: string;
+  noPo: string; // default '-'
+  noKontainer?: string; // No. Kontainer armada/pengiriman
+  noFaktur?: string; // No. Faktur pajak/penjualan
+  noInvoice?: string; // No. Invoice tagihan
+  ruteDariId: string;
+  ruteDariNama: string;
+  ruteDariAlamat?: string;
+  ruteTujuanId: string;
+  ruteTujuanKode: string; // matches pallet destination e.g. 'SJA Semarang'
+  ruteTujuanNama: string;
+  ruteTujuanAlamat?: string;
+  vendorId?: string;
+  namaVendorArmada: string;
+  tarif?: number;
+  ppnPersen?: number;
+  tarifTotal?: number;
+  namaDriver: string;
+  noHpDriver: string;
+  palletIds: string[];
+  itemsSummary: SuratJalanItemLine[];
+  grandTotalBox: number;
+  grandTotalKg: number;
+  note?: string;
+  createdAt: string;
+}
+
+export interface PalletBatchEntry {
+  noBatch: string;
+  boxAwal: string;
+  boxAkhir: string;
+  qtyBox?: number;
 }
 
 export interface PalletRowInput {
@@ -14,11 +121,12 @@ export interface PalletRowInput {
   namaBarang: string;
   qtyPallet: string | number;
   unit: string;
-  noBatch: string; // Kolom baru: No. Batch
-  boxAwal: string; // No. Box Awal (sebelumnya Batch Awal)
-  boxAkhir: string; // No. Box Akhir (sebelumnya Batch Akhir)
+  noBatch: string; // Kolom utama: No. Batch 1
+  boxAwal: string; // No. Box Awal Batch 1
+  boxAkhir: string; // No. Box Akhir Batch 1
   batchAwal?: string; // kompatibilitas
   batchAkhir?: string; // kompatibilitas
+  extraBatches?: PalletBatchEntry[]; // Batch tambahan (Batch ke-2, ke-3, dst) dalam 1 pallet
   keterangan?: string;
 }
 
@@ -32,11 +140,12 @@ export interface PalletRecord {
   namaBarang: string;
   qtyPallet: number;
   unit: string;
-  noBatch: string; // No. Batch
+  noBatch: string; // No. Batch (atau gabungan jika multi-batch)
   boxAwal: string; // No. Box Awal
   boxAkhir: string; // No. Box Akhir
   batchAwal?: string; // kompatibilitas
   batchAkhir?: string; // kompatibilitas
+  batches?: PalletBatchEntry[]; // Daftar seluruh batch & no box dalam 1 pallet (jika >= 1 batch)
   lokasiBin: string; // 1x input applied to all rows in pallet
   keterangan?: string;
   submittedAt: string;
@@ -45,6 +154,9 @@ export interface PalletRecord {
   tujuanPengambilan?: string; // 'SJA Sepanjang' | 'SJA Karawang' | 'SJA Sukodono' | 'SJA Semarang'
   tanggalPengambilan?: string; // ISO string / formatted date timestamp
   petugasPengambilan?: string;
+  suratJalanId?: string; // ID Surat Jalan jika sudah dimuat
+  noSuratJalan?: string;
+  binOrder?: number; // Custom physical stack/order rank within a Bin (higher comes first at Row No. 1)
 }
 
 export const OUTBOUND_DESTINATIONS = [
@@ -80,18 +192,88 @@ export const COMMON_UNITS = [
   'Bal'
 ];
 
-// Master database barang awal dengan default satuan 'Box'
+// Master database barang awal dengan default satuan 'Box' dan berat per box 30 Kg
 export const DEFAULT_MASTER_ITEMS: MasterItem[] = [
-  { id: 'itm-sic-1', kodeItem: '00J.KPI18.K030706', namaBarang: 'SIC 25 BR (1 X 30 KG)', satuan: 'Box', defaultQty: 15, kategori: 'Bahan Baku' },
-  { id: 'itm-sic-2', kodeItem: '00J.KPI18.K030707', namaBarang: 'SIC 8590 SD (1 X 30 KG)', satuan: 'Box', defaultQty: 15, kategori: 'Bahan Baku' },
-  { id: 'itm-sic-3', kodeItem: '00J.KPI18.K030708', namaBarang: 'SIC 8590 HD (1 X 30 KG)', satuan: 'Box', defaultQty: 15, kategori: 'Bahan Baku' },
-  { id: 'itm-sic-4', kodeItem: '00J.KPI18.K030709', namaBarang: 'SIC 30 BR (1 X 25 KG)', satuan: 'Box', defaultQty: 20, kategori: 'Bahan Baku' },
-  { id: 'itm-1', kodeItem: 'KDK-UHT100', namaBarang: 'Susu UHT Full Cream 1000ml', satuan: 'Box', defaultQty: 120, kategori: 'Minuman' },
-  { id: 'itm-2', kodeItem: 'KDK-UHT250', namaBarang: 'Susu UHT Cokelat 250ml', satuan: 'Box', defaultQty: 160, kategori: 'Minuman' },
-  { id: 'itm-3', kodeItem: 'KDK-MGS002', namaBarang: 'Minyak Goreng Sawit Pouch 2L', satuan: 'Box', defaultQty: 80, kategori: 'Sembako' },
-  { id: 'itm-4', kodeItem: 'KDK-MGB001', namaBarang: 'Minyak Goreng Botol 1L', satuan: 'Box', defaultQty: 96, kategori: 'Sembako' },
-  { id: 'itm-5', kodeItem: 'KDK-TPG001', namaBarang: 'Tepung Terigu Serbaguna 1kg', satuan: 'Box', defaultQty: 100, kategori: 'Bahan Baku' },
-  { id: 'itm-6', kodeItem: 'KDK-GLA001', namaBarang: 'Gula Pasir Kristal Putih 1kg', satuan: 'Box', defaultQty: 150, kategori: 'Sembako' }
+  { id: 'itm-sic-1', kodeItem: '00J.KPI18.K030706', namaBarang: 'SIC 25 BR (1 X 30 KG)', satuan: 'Box', defaultQty: 15, beratPerBoxKg: 30, kategori: 'Bahan Baku' },
+  { id: 'itm-sic-2', kodeItem: '00J.KPI18.K030707', namaBarang: 'SIC 8590 SD (1 X 30 KG)', satuan: 'Box', defaultQty: 15, beratPerBoxKg: 30, kategori: 'Bahan Baku' },
+  { id: 'itm-sic-3', kodeItem: '00J.KPI18.K030708', namaBarang: 'SIC 8590 HD (1 X 30 KG)', satuan: 'Box', defaultQty: 15, beratPerBoxKg: 30, kategori: 'Bahan Baku' },
+  { id: 'itm-sic-4', kodeItem: '00J.KPI18.K030709', namaBarang: 'SIC 30 BR (1 X 25 KG)', satuan: 'Box', defaultQty: 20, beratPerBoxKg: 25, kategori: 'Bahan Baku' },
+  { id: 'itm-sic-5', kodeItem: '00J.KPI10.K0307001XX', namaBarang: 'SIC 01 PC (1 X 30 KG)', satuan: 'Box', defaultQty: 15, beratPerBoxKg: 30, kategori: 'Bahan Baku' },
+  { id: 'itm-sic-6', kodeItem: '00J.KPI09.K0307001XX', namaBarang: 'SIC 18 C1 (1 X 30 KG)', satuan: 'Box', defaultQty: 15, beratPerBoxKg: 30, kategori: 'Bahan Baku' },
+  { id: 'itm-1', kodeItem: 'KDK-UHT100', namaBarang: 'Susu UHT Full Cream 1000ml', satuan: 'Box', defaultQty: 120, beratPerBoxKg: 12, kategori: 'Minuman' },
+  { id: 'itm-2', kodeItem: 'KDK-UHT250', namaBarang: 'Susu UHT Cokelat 250ml', satuan: 'Box', defaultQty: 160, beratPerBoxKg: 10, kategori: 'Minuman' },
+  { id: 'itm-3', kodeItem: 'KDK-MGS002', namaBarang: 'Minyak Goreng Sawit Pouch 2L', satuan: 'Box', defaultQty: 80, beratPerBoxKg: 16, kategori: 'Sembako' },
+  { id: 'itm-4', kodeItem: 'KDK-MGB001', namaBarang: 'Minyak Goreng Botol 1L', satuan: 'Box', defaultQty: 96, beratPerBoxKg: 12, kategori: 'Sembako' },
+  { id: 'itm-5', kodeItem: 'KDK-TPG001', namaBarang: 'Tepung Terigu Serbaguna 1kg', satuan: 'Box', defaultQty: 100, beratPerBoxKg: 25, kategori: 'Bahan Baku' },
+  { id: 'itm-6', kodeItem: 'KDK-GLA001', namaBarang: 'Gula Pasir Kristal Putih 1kg', satuan: 'Box', defaultQty: 150, beratPerBoxKg: 30, kategori: 'Sembako' }
+];
+
+// Master Database Rute Dari & Tujuan (lengkap dengan alamat, tarif default, dan PPN)
+export const DEFAULT_MASTER_ROUTES: MasterRoute[] = [
+  {
+    id: 'route-sukodono-origin',
+    kodeLokasi: 'SJA Sukodono',
+    namaLokasi: 'PT. SANTOS JAYA ABADI GUDANG KONVERSI 1 - SUKODONO',
+    alamat: 'Jl. Raya Panjunan No.KM 3, Babatan, Panjunan, Kec. Sukodono, Kabupaten Sidoarjo, Jawa Timur 61258',
+    tipe: 'KEDUA',
+    tarifDefault: 0,
+    ppnPersen: 0
+  },
+  {
+    id: 'route-semarang',
+    kodeLokasi: 'SJA Semarang',
+    namaLokasi: 'PT. SANTOS JAYA ABADI GUDANG KONVERSI 1 - SEMARANG',
+    alamat: 'Kawasan Industri Wijayakusuma Blok B-12, Tugu, Semarang, Jawa Tengah 50153',
+    tipe: 'TUJUAN',
+    tarifDefault: 3500000,
+    ppnPersen: 0
+  },
+  {
+    id: 'route-sepanjang',
+    kodeLokasi: 'SJA Sepanjang',
+    namaLokasi: 'PT. SANTOS JAYA ABADI - SEPANJANG',
+    alamat: 'Jl. Raya Sepanjang KM 18, Taman, Sidoarjo, Jawa Timur 61257',
+    tipe: 'TUJUAN',
+    tarifDefault: 1200000,
+    ppnPersen: 0
+  },
+  {
+    id: 'route-karawang',
+    kodeLokasi: 'SJA Karawang',
+    namaLokasi: 'PT. SANTOS JAYA ABADI - KARAWANG',
+    alamat: 'Kawasan Industri Surya Cipta, Jl. Surya Lestari Kav. 1-2C, Telukjambe Timur, Karawang 41361',
+    tipe: 'TUJUAN',
+    tarifDefault: 4500000,
+    ppnPersen: 0
+  }
+];
+
+// Master Database Vendor Armada (lengkap dengan tarif default dan PPN)
+export const DEFAULT_MASTER_VENDORS: MasterVendor[] = [
+  {
+    id: 'vendor-1',
+    namaVendor: 'PT. Trans Sidoarjo Logistik',
+    kontak: '0812-3456-7890 (Pak Bambang)',
+    tarifDefault: 3500000,
+    ppnPersen: 11,
+    keterangan: 'Armada Wingbox & Fuso CDD'
+  },
+  {
+    id: 'vendor-2',
+    namaVendor: 'CV. Armada Jaya Mandiri',
+    kontak: '0813-9876-5432 (Ibu Dewi)',
+    tarifDefault: 2800000,
+    ppnPersen: 11,
+    keterangan: 'Armada CDD & Tronton'
+  },
+  {
+    id: 'vendor-3',
+    namaVendor: 'PT. Ekspedisi Nusantara Sentosa',
+    kontak: '0821-4455-6677 (Bpk. Hadi)',
+    tarifDefault: 4200000,
+    ppnPersen: 11,
+    keterangan: 'Spesialis Antar-Pulau & Rute Pantura'
+  }
 ];
 
 // Layout Gudang 5:
@@ -113,4 +295,116 @@ export const GUDANG5_SLOTS_B_PRIMARY: string[] = [
 ];
 
 export const GUDANG5_QUICK_BINS = [...GUDANG5_SLOTS_A, ...GUDANG5_SLOTS_B];
+
+// Master Database Rute & Tarif (Persis seperti attachment image_5ce49fe3.png)
+export const DEFAULT_MASTER_ROUTE_TARIFFS: MasterRouteTariff[] = [
+  {
+    id: 'tariff-1',
+    ruteAwal: 'PT. SANTOS JAYA ABADI GUDANG KONVERSI 1 - SUKODONO',
+    ruteTujuan: 'PT. SANTOS JAYA ABADI GUDANG KONVERSI 1 - KARAWANG',
+    alamatTujuan: 'Jl. Surya Madya Kav. I-18 Ds. Kuta Mekar Kec. Ciampel Karawang 41361',
+    vendor: 'CTL',
+    tarif: 4675000,
+    ppnPersen: 11
+  },
+  {
+    id: 'tariff-2',
+    ruteAwal: 'PT. SANTOS JAYA ABADI GUDANG KONVERSI 1 - SUKODONO',
+    ruteTujuan: 'PT. SANTOS JAYA ABADI GUDANG KONVERSI 1 - KARAWANG',
+    alamatTujuan: 'Jl. Surya Madya Kav. I-18 Ds. Kuta Mekar Kec. Ciampel Karawang 41361',
+    vendor: 'DUTA LINTAS',
+    tarif: 5000000,
+    ppnPersen: 11
+  },
+  {
+    id: 'tariff-3',
+    ruteAwal: 'PT. SANTOS JAYA ABADI GUDANG KONVERSI 1 - SUKODONO',
+    ruteTujuan: 'PT. SANTOS JAYA ABADI GUDANG KONVERSI 1 - SEMARANG',
+    alamatTujuan: 'Jl. Gatot Subroto Kawasan Industri Candi Blok G-H Ngaliyan Semarang',
+    vendor: 'FLI',
+    tarif: 4500000,
+    ppnPersen: 11
+  },
+  {
+    id: 'tariff-4',
+    ruteAwal: 'PT. SANTOS JAYA ABADI GUDANG KONVERSI 1 - SUKODONO',
+    ruteTujuan: 'AGEL LANGGENG BEKASI',
+    alamatTujuan: 'Kawasan Industri MM2100 Cikarang Barat Bekasi',
+    vendor: 'LOGISTIK CANGGIH',
+    tarif: 3600000,
+    ppnPersen: 1.1
+  },
+  {
+    id: 'tariff-5',
+    ruteAwal: 'PT. SANTOS JAYA ABADI GUDANG KONVERSI 1 - KARAWANG',
+    ruteTujuan: 'PT. SANTOS JAYA ABADI GUDANG KONVERSI 1 - SUKODONO',
+    alamatTujuan: 'Jl. Raya Panjunan No.KM 3, Babatan, Panjunan, Kec. Sukodono, Kabupaten Sidoarjo, Jawa Timur 61258',
+    vendor: 'CTL',
+    tarif: 4800000,
+    ppnPersen: 0,
+    keterangan: 'Rute Balik Karawang -> Sukodono'
+  },
+  {
+    id: 'tariff-6',
+    ruteAwal: 'PT. SANTOS JAYA ABADI GUDANG KONVERSI 1 - SUKODONO',
+    ruteTujuan: 'PT. SANTOS JAYA ABADI GUDANG KONVERSI 1 - SEPANJANG',
+    alamatTujuan: 'Jl Raya Gilang no 159 Sepanjang Sidoarjo',
+    vendor: 'PT. Trans Sidoarjo Logistik',
+    tarif: 1200000,
+    ppnPersen: 11
+  }
+];
+
+// Master Database Blacklist
+export const DEFAULT_BLACKLIST_RECORDS: BlacklistRecord[] = [
+  {
+    id: 'bl-1',
+    tipe: 'NOPOL',
+    identifier: 'B 9482 KDA',
+    alasan: 'Kondisi bak bocor saat hujan / tidak standar SOP',
+    tanggal: '05/11/2026',
+    status: 'ACTIVE'
+  },
+  {
+    id: 'bl-2',
+    tipe: 'DRIVER',
+    identifier: 'Herman (PT. Ekspedisi X)',
+    alasan: 'Terlambat melebihi toleransi waktu 6 jam tanpa konfirmasi',
+    tanggal: '01/11/2026',
+    status: 'ACTIVE'
+  }
+];
+
+// Master Database Warehouse Users (User Management)
+export const DEFAULT_WAREHOUSE_USERS: WarehouseUser[] = [
+  {
+    id: 'usr-1',
+    nama: 'Sandy Pradana',
+    username: 'sandy.admin',
+    role: 'Super Admin',
+    status: 'Aktif'
+  },
+  {
+    id: 'usr-2',
+    nama: 'Agus Santoso',
+    username: 'agus.wh',
+    role: 'Warehouse Admin',
+    status: 'Aktif'
+  },
+  {
+    id: 'usr-3',
+    nama: 'Budi Raharjo',
+    username: 'budi.spv',
+    role: 'Supervisor',
+    status: 'Aktif'
+  },
+  {
+    id: 'usr-4',
+    nama: 'Rian Pratama',
+    username: 'rian.opt',
+    role: 'Operator Lapangan',
+    status: 'Aktif'
+  }
+];
+
 

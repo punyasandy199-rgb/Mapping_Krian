@@ -39,5 +39,41 @@ service cloud.firestore {
       allow update: if isValidId(itemId);
       allow delete: if isValidId(itemId);
     }
+
+    // Master routes (lokasi asal & tujuan beserta alamat)
+    match /master_routes/{routeId} {
+      allow read: if true;
+      allow create, update, delete: if isValidId(routeId);
+    }
+
+    // Master vendor armada (vendor, tarif, PPN)
+    match /master_vendors/{vendorId} {
+      allow read: if true;
+      allow create, update, delete: if isValidId(vendorId);
+    }
+
+    // Master Tujuan & Tarif (Multi-vendor & Bolak-balik)
+    match /master_route_tariffs/{tariffId} {
+      allow read: if true;
+      allow create, update, delete: if isValidId(tariffId);
+    }
+
+    // Master Blacklist (Nopol, Driver, Vendor, Pallet)
+    match /master_blacklist/{blacklistId} {
+      allow read: if true;
+      allow create, update, delete: if isValidId(blacklistId);
+    }
+
+    // Warehouse Users (Operator, Supervisor, Admin)
+    match /warehouse_users/{userId} {
+      allow read: if true;
+      allow create, update, delete: if isValidId(userId);
+    }
+
+    // Surat Jalan / Delivery Note records
+    match /surat_jalan_records/{suratId} {
+      allow read: if true;
+      allow create, update, delete: if isValidId(suratId);
+    }
   }
 }

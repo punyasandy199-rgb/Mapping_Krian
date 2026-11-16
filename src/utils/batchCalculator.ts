@@ -1,3 +1,5 @@
+import { PalletBatchEntry } from '../types/warehouse';
+
 /**
  * Utility to calculate total boxes from trailing numbers in Batch Awal & Batch Akhir.
  * Handles formats like:
@@ -81,4 +83,73 @@ export function calculateBatchBoxCount(
 }
 
 export const calculateBoxRangeCount = calculateBatchBoxCount;
+
+export function getPalletBatches(record: {
+  noBatch?: string;
+  boxAwal?: string;
+  boxAkhir?: string;
+  batchAwal?: string;
+  batchAkhir?: string;
+  batches?: PalletBatchEntry[];
+}): PalletBatchEntry[] {
+  if (record.batches && record.batches.length > 0) {
+    return record.batches.filter(
+      (b) => b && (b.noBatch?.trim() || b.boxAwal?.trim() || b.boxAkhir?.trim())
+    );
+  }
+  const noBatch = (record.noBatch || '').trim();
+  const boxAwal = (record.boxAwal || record.batchAwal || '').trim();
+  const boxAkhir = (record.boxAkhir || record.batchAkhir || '').trim();
+  if (!noBatch && !boxAwal && !boxAkhir) {
+    return [];
+  }
+  const calc = calculateBatchBoxCount(boxAwal, boxAkhir);
+  return [
+    {
+      noBatch,
+      boxAwal,
+      boxAkhir,
+      qtyBox: calc?.isValid ? calc.totalBox : undefined
+    }
+  ];
+}
+
+export function formatPalletBatchNumbers(record: {
+  noBatch?: string;
+  boxAwal?: string;
+  boxAkhir?: string;
+  batchAwal?: string;
+  batchAkhir?: string;
+  batches?: PalletBatchEntry[];
+}): string {
+  const list = getPalletBatches(record);
+  if (list.length === 0) return record.noBatch || '-';
+  return list.map((b) => b.noBatch || '-').join(' / ');
+}
+
+export function formatPalletBoxRanges(record: {
+  noBatch?: string;
+  boxAwal?: string;
+  boxAkhir?: string;
+  batchAwal?: string;
+  batchAkhir?: string;
+  batches?: PalletBatchEntry[];
+}): string {
+  const list = getPalletBatches(record);
+  if (list.length === 0) {
+    const start = (record.boxAwal || record.batchAwal || '').trim();
+    const end = (record.boxAkhir || record.batchAkhir || '').trim();
+    if (start && end) return `${start} - ${end}`;
+    return start || end || '-';
+  }
+  return list
+    .map((b) => {
+      const s = (b.boxAwal || '').trim();
+      const e = (b.boxAkhir || '').trim();
+      if (s && e) return `${s} - ${e}`;
+      return s || e || '-';
+    })
+    .join(' / ');
+}
+
 

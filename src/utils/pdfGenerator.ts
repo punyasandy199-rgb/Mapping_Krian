@@ -3,24 +3,30 @@ import QRCode from 'qrcode';
 import { PalletRecord } from '../types/warehouse';
 import { encodeCode128B } from './code128';
 import { sortBinRecordsByLoadingOrder } from './binSorting';
+import {
+  formatPalletBatchNumbers,
+  formatPalletBoxRanges,
+  getPalletBatches
+} from './batchCalculator';
 
 /**
  * Generates and downloads a thermal label PDF (100mm x 150mm) for one or multiple pallet records.
  * Can be sent directly to thermal label printers (Zebra, TSC, Xprinter, Honeywell, Brother)
  * or standard printers, and saved as a crisp vector PDF file.
  */
-export async function downloadPalletLabelPdf(
+export async function generatePalletLabelPdfDoc(
   records: PalletRecord[],
-  filename?: string
-): Promise<void> {
-  if (!records || records.length === 0) return;
-
-  // 100mm x 150mm standard thermal label size in portrait
+  enableAutoPrint = false
+): Promise<jsPDF> {
   const doc = new jsPDF({
     orientation: 'portrait',
     unit: 'mm',
     format: [100, 150]
   });
+
+  if (enableAutoPrint) {
+    doc.autoPrint();
+  }
 
   for (let idx = 0; idx < records.length; idx++) {
     if (idx > 0) {
@@ -30,6 +36,17 @@ export async function downloadPalletLabelPdf(
     const record = records[idx];
     await renderSingleLabelOnDoc(doc, record);
   }
+
+  return doc;
+}
+
+export async function downloadPalletLabelPdf(
+  records: PalletRecord[],
+  filename?: string
+): Promise<void> {
+  if (!records || records.length === 0) return;
+
+  const doc = await generatePalletLabelPdfDoc(records, false);
 
   const defaultFilename =
     records.length === 1
@@ -137,11 +154,12 @@ export async function downloadPalletHistoryReportPdf(
     doc.text(`${r.qtyPallet} ${r.unit}`, margin + 124, startY + 4.5);
 
     doc.setTextColor(29, 78, 216);
-    doc.text(r.noBatch || '-', margin + 142, startY + 4.5);
+    const batchText = doc.splitTextToSize(formatPalletBatchNumbers(r), 19)[0] || '-';
+    doc.text(batchText, margin + 142, startY + 4.5);
 
     doc.setFont('helvetica', 'normal');
     doc.setTextColor(51, 65, 85);
-    const boxRangeStr = `${r.boxAwal || r.batchAwal || '-'} - ${r.boxAkhir || r.batchAkhir || '-'}`;
+    const boxRangeStr = doc.splitTextToSize(formatPalletBoxRanges(r), 33)[0] || '-';
     doc.text(boxRangeStr, margin + 162, startY + 4.5);
 
     startY += 7;
@@ -291,34 +309,56 @@ async function renderSingleLabelOnDoc(doc: jsPDF, record: PalletRecord): Promise
   doc.setDrawColor(203, 213, 225);
   doc.roundedRect(8, 89, 84, 17, 1.5, 1.5, 'FD');
 
-  doc.setFontSize(7);
-  doc.setFont('helvetica', 'bold');
-  doc.setTextColor(100, 116, 139);
-  doc.text('NO. BATCH:', 11, 93.5);
+  const labelBatches = getPalletBatches(record);
+  if (labelBatches.length > 1) {
+    doc.setFontSize(6.5);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(100, 116, 139);
+    doc.text(`MULTI BATCH (${labelBatches.length} BATCH):`, 11, 93);
 
-  doc.setFontSize(8);
-  doc.setFont('helvetica', 'bold');
-  doc.setTextColor(29, 78, 216);
-  doc.text(record.noBatch || '-', 32, 93.5);
+    labelBatches.slice(0, 3).forEach((b, bIdx) => {
+      const yLine = 97.2 + bIdx * 3.8;
+      doc.setFontSize(7.2);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(29, 78, 216);
+      doc.text(`${bIdx + 1}. ${b.noBatch || '-'}`, 11, yLine);
 
-  doc.setFontSize(6.5);
-  doc.setTextColor(100, 116, 139);
-  doc.text('RENTANG NO. BOX', 11, 99);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(15, 23, 42);
+      const s = (b.boxAwal || '').trim() || '-';
+      const e = (b.boxAkhir || '').trim() || '-';
+      doc.text(`Box ${s} - ${e}`, 90, yLine, { align: 'right' });
+    });
+  } else {
+    doc.setFontSize(7);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(100, 116, 139);
+    doc.text('NO. BATCH:', 11, 93.5);
 
-  doc.setFontSize(8);
-  doc.setFont('helvetica', 'bold');
-  doc.setTextColor(15, 23, 42);
-  const boxStart = record.boxAwal || record.batchAwal || '-';
-  const boxEnd = record.boxAkhir || record.batchAkhir || '-';
-  doc.text(`Box: ${boxStart}`, 11, 104);
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(29, 78, 216);
+    doc.text(record.noBatch || '-', 32, 93.5);
 
-  doc.setFont('helvetica', 'normal');
-  doc.setTextColor(100, 116, 139);
-  doc.text('s/d', 50, 104, { align: 'center' });
+    doc.setFontSize(6.5);
+    doc.setTextColor(100, 116, 139);
+    doc.text('RENTANG NO. BOX', 11, 99);
 
-  doc.setFont('helvetica', 'bold');
-  doc.setTextColor(15, 23, 42);
-  doc.text(`Box: ${boxEnd}`, 90, 104, { align: 'right' });
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(15, 23, 42);
+    const boxStart = record.boxAwal || record.batchAwal || '-';
+    const boxEnd = record.boxAkhir || record.batchAkhir || '-';
+    doc.text(`Box: ${boxStart}`, 11, 104);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(100, 116, 139);
+    doc.text('s/d', 50, 104, { align: 'center' });
+
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(15, 23, 42);
+    doc.text(`Box: ${boxEnd}`, 90, 104, { align: 'right' });
+  }
 
   // Keterangan if exists
   if (record.keterangan) {
@@ -627,20 +667,32 @@ export async function generateBinManifestPdfDoc(
 
       // Col 6: No. Batch
       doc.setTextColor(29, 78, 216);
-      doc.text(r.noBatch || '-', 142, currentY + 5.3);
+      const binBatches = getPalletBatches(r);
+      if (binBatches.length > 1) {
+        doc.setFontSize(7);
+        binBatches.slice(0, 2).forEach((b, bIdx) => {
+          doc.text(b.noBatch || '-', 142, currentY + 3.4 + bIdx * 3.3);
+        });
+      } else {
+        doc.setFontSize(8.5);
+        doc.text(r.noBatch || '-', 142, currentY + 5.3);
+      }
 
       // Col 7: No. Box (Awal - Akhir) - Centered at 179
       doc.setFont('helvetica', 'normal');
       doc.setTextColor(30, 41, 59);
-      const startBox = (r.boxAwal || r.batchAwal || '').trim();
-      const endBox = (r.boxAkhir || r.batchAkhir || '').trim();
-      let boxRangeText = '-';
-      if (startBox && endBox) {
-        boxRangeText = `${startBox} - ${endBox}`;
-      } else if (startBox || endBox) {
-        boxRangeText = startBox || endBox;
+      if (binBatches.length > 1) {
+        doc.setFontSize(7.5);
+        binBatches.slice(0, 2).forEach((b, bIdx) => {
+          const s = (b.boxAwal || '').trim();
+          const e = (b.boxAkhir || '').trim();
+          const txt = s && e ? `${s} - ${e}` : s || e || '-';
+          doc.text(txt, 179, currentY + 3.4 + bIdx * 3.3, { align: 'center' });
+        });
+      } else {
+        doc.setFontSize(8.5);
+        doc.text(formatPalletBoxRanges(r), 179, currentY + 5.3, { align: 'center' });
       }
-      doc.text(boxRangeText, 179, currentY + 5.3, { align: 'center' });
 
       currentY += rowHeight;
     });
@@ -752,9 +804,11 @@ export async function generateBinManifestPdfDoc(
       // Batch & Box
       doc.setFont('helvetica', 'normal');
       doc.setTextColor(71, 85, 105);
-      const boxStr =
-        r.boxAwal || r.batchAwal ? ` (${r.boxAwal || r.batchAwal}-${r.boxAkhir || r.batchAkhir})` : '';
-      doc.text(`${r.noBatch || '-'}${boxStr}`, 132, currentY + 4.5);
+      const batchBoxCompact = doc.splitTextToSize(
+        `${formatPalletBatchNumbers(r)} (${formatPalletBoxRanges(r)})`,
+        24
+      )[0] || '-';
+      doc.text(batchBoxCompact, 132, currentY + 4.5);
 
       // Tujuan
       doc.setFont('helvetica', 'bold');
@@ -805,11 +859,23 @@ export async function downloadBinManifestPdf(
  */
 export async function openBinManifestPdfInNewTab(
   binCode: string,
-  records: PalletRecord[]
-): Promise<void> {
+  records: PalletRecord[],
+  enableAutoPrint = false
+): Promise<string> {
   const doc = await generateBinManifestPdfDoc(binCode, records);
-  const blobUrl = doc.output('bloburl');
-  window.open(blobUrl, '_blank');
+  if (enableAutoPrint) {
+    doc.autoPrint();
+  }
+  const blobUrl = URL.createObjectURL(doc.output('blob'));
+  const link = document.createElement('a');
+  link.href = blobUrl;
+  link.target = '_blank';
+  link.rel = 'noopener noreferrer';
+  link.style.display = 'none';
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  return blobUrl;
 }
 
 

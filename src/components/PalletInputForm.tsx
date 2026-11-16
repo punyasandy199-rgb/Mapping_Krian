@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import {
   PalletRowInput,
+  PalletBatchEntry,
   MasterItem,
   COMMON_UNITS,
   GUDANG5_SLOTS_A,
@@ -46,6 +47,7 @@ const createEmptyRow = (index: number, inheritFrom?: PalletRowInput): PalletRowI
   boxAkhir: '', // No. Box Akhir kosong
   batchAwal: '',
   batchAkhir: '',
+  extraBatches: [],
   keterangan: inheritFrom?.keterangan || ''
 });
 
@@ -110,6 +112,57 @@ export const PalletInputForm: React.FC<PalletInputFormProps> = ({
     }
   };
 
+  const handleAddExtraBatch = (rowId: string) => {
+    setRows((prev) =>
+      prev.map((row) => {
+        if (row.id !== rowId) return row;
+        const currentExtra = row.extraBatches || [];
+        return {
+          ...row,
+          extraBatches: [...currentExtra, { noBatch: '', boxAwal: '', boxAkhir: '' }]
+        };
+      })
+    );
+  };
+
+  const handleRemoveExtraBatch = (rowId: string, batchIndex: number) => {
+    setRows((prev) =>
+      prev.map((row) => {
+        if (row.id !== rowId) return row;
+        const currentExtra = row.extraBatches || [];
+        return {
+          ...row,
+          extraBatches: currentExtra.filter((_, idx) => idx !== batchIndex)
+        };
+      })
+    );
+  };
+
+  const handleExtraBatchChange = (
+    rowId: string,
+    batchIndex: number,
+    field: 'noBatch' | 'boxAwal' | 'boxAkhir',
+    value: string
+  ) => {
+    setRows((prev) =>
+      prev.map((row) => {
+        if (row.id !== rowId) return row;
+        const currentExtra = row.extraBatches || [];
+        const updatedExtra = currentExtra.map((eb, idx) =>
+          idx === batchIndex ? { ...eb, [field]: value } : eb
+        );
+        return { ...row, extraBatches: updatedExtra };
+      })
+    );
+    if (errors[rowId]) {
+      setErrors((prev) => {
+        const next = { ...prev };
+        delete next[rowId];
+        return next;
+      });
+    }
+  };
+
   const handleSelectMasterItem = (rowId: string, item: MasterItem) => {
     setRows((prev) =>
       prev.map((row) => {
@@ -141,6 +194,7 @@ export const PalletInputForm: React.FC<PalletInputFormProps> = ({
       boxAkhir: `050`,
       batchAwal: `001`,
       batchAkhir: `050`,
+      extraBatches: [],
       keterangan: 'Pemeriksaan inbound OK'
     }));
     setRows(newRows);
@@ -175,6 +229,18 @@ export const PalletInputForm: React.FC<PalletInputFormProps> = ({
         newErrors[row.id] = `Baris #${idx + 1}: Qty harus lebih dari 0`;
       } else if (!boxAwalVal || !boxAkhirVal) {
         newErrors[row.id] = `Baris #${idx + 1}: No. Box Awal & No. Box Akhir wajib diisi`;
+      } else if (row.extraBatches && row.extraBatches.length > 0) {
+        for (let bIdx = 0; bIdx < row.extraBatches.length; bIdx++) {
+          const eb = row.extraBatches[bIdx];
+          if (!eb.noBatch.trim()) {
+            newErrors[row.id] = `Baris #${idx + 1} Batch #${bIdx + 2}: No. Batch wajib diisi`;
+            break;
+          }
+          if (!eb.boxAwal.trim() || !eb.boxAkhir.trim()) {
+            newErrors[row.id] = `Baris #${idx + 1} Batch #${bIdx + 2}: No. Box Awal & Akhir wajib diisi`;
+            break;
+          }
+        }
       }
     });
 
@@ -417,10 +483,21 @@ export const PalletInputForm: React.FC<PalletInputFormProps> = ({
           <div className="space-y-3">
             {rows.map((row, index) => {
               const hasError = !!errors[row.id];
+              const extraBatches = row.extraBatches || [];
               const boxCalc = calculateBatchBoxCount(
                 row.boxAwal || row.batchAwal || '',
                 row.boxAkhir || row.batchAkhir || ''
               );
+              const extraCalcs = extraBatches.map((eb) =>
+                calculateBatchBoxCount(eb.boxAwal, eb.boxAkhir)
+              );
+              const allCalcs = [boxCalc, ...extraCalcs];
+              const hasAnyInvalidCalc = allCalcs.some((c) => c && !c.isValid);
+              const firstInvalidMsg = allCalcs.find((c) => c && !c.isValid)?.message;
+              const validBatchCounts = allCalcs
+                .map((c, bIdx) => (c && c.isValid ? { batchNo: bIdx + 1, count: c.totalBox, calc: c } : null))
+                .filter((v): v is NonNullable<typeof v> => v !== null);
+              const combinedTotalBoxes = validBatchCounts.reduce((sum, v) => sum + v.count, 0);
 
               return (
                 <div
@@ -432,7 +509,7 @@ export const PalletInputForm: React.FC<PalletInputFormProps> = ({
                   }`}
                 >
                   {/* Row Header */}
-                  <div className="flex items-center justify-between pb-2 mb-3 border-b border-slate-100 dark:border-slate-800/80">
+                  <div className="flex flex-wrap items-center justify-between gap-2 pb-2 mb-3 border-b border-slate-100 dark:border-slate-800/80">
                     <div className="flex items-center gap-2">
                       <span className="w-5 h-5 rounded-full bg-slate-900 dark:bg-slate-800 text-white text-[11px] font-bold font-mono flex items-center justify-center">
                         {index + 1}
@@ -440,9 +517,24 @@ export const PalletInputForm: React.FC<PalletInputFormProps> = ({
                       <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
                         Item #{index + 1}
                       </span>
+                      {extraBatches.length > 0 && (
+                        <span className="px-2 py-0.5 rounded bg-blue-100 dark:bg-blue-950 text-blue-700 dark:text-blue-300 text-[10px] font-bold border border-blue-200 dark:border-blue-800">
+                          {extraBatches.length + 1} Batch dalam 1 Pallet
+                        </span>
+                      )}
                     </div>
 
                     <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleAddExtraBatch(row.id)}
+                        className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-blue-50 dark:bg-blue-950/60 hover:bg-blue-100 dark:hover:bg-blue-900/60 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 text-[11px] font-bold transition-colors cursor-pointer"
+                        title="Tambahkan batch lain (beserta no box awal & akhir) di dalam 1 pallet yang sama"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>Tambah Batch di Pallet Ini</span>
+                      </button>
+
                       {rows.length > 1 && (
                         <button
                           type="button"
@@ -626,10 +718,11 @@ export const PalletInputForm: React.FC<PalletInputFormProps> = ({
                       </div>
                     </div>
 
-                    {/* 4. NO. BATCH (KOLOM BARU) */}
+                    {/* 4. NO. BATCH 1 */}
                     <div className="lg:col-span-2">
                       <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                        No. Batch <span className="text-red-500">*</span>
+                        {extraBatches.length > 0 ? 'No. Batch #1' : 'No. Batch'}{' '}
+                        <span className="text-red-500">*</span>
                       </label>
                       <input
                         type="text"
@@ -646,7 +739,7 @@ export const PalletInputForm: React.FC<PalletInputFormProps> = ({
                       </div>
                     </div>
 
-                    {/* 5. NO. BOX AWAL & NO. BOX AKHIR */}
+                    {/* 5. NO. BOX AWAL & NO. BOX AKHIR (BATCH 1) */}
                     <div className="lg:col-span-3">
                       <div className="grid grid-cols-2 gap-2">
                         <div>
@@ -687,10 +780,110 @@ export const PalletInputForm: React.FC<PalletInputFormProps> = ({
                     </div>
                   </div>
 
+                  {/* BATCH TAMBAHAN (BATCH #2, #3, DST) DI DALAM 1 PALLET YANG SAMA */}
+                  {extraBatches.length > 0 && (
+                    <div className="mt-3 pt-3 border-t border-dashed border-blue-200 dark:border-blue-900/60 space-y-2.5">
+                      {extraBatches.map((eb, bIdx) => {
+                        const ebCalc = extraCalcs[bIdx];
+                        return (
+                          <div
+                            key={bIdx}
+                            className="p-3 rounded-lg bg-blue-50/50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-900/60 grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-end"
+                          >
+                            <div className="sm:col-span-2 flex items-center gap-2 self-center">
+                              <span className="px-2 py-1 rounded bg-blue-600 text-white text-[11px] font-bold font-mono">
+                                Batch #{bIdx + 2}
+                              </span>
+                              {ebCalc?.isValid && (
+                                <span className="text-[11px] font-mono font-bold text-emerald-700 dark:text-emerald-300">
+                                  ({ebCalc.totalBox} Box)
+                                </span>
+                              )}
+                            </div>
+
+                            <div className="sm:col-span-3">
+                              <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                                No. Batch #{bIdx + 2} <span className="text-red-500">*</span>
+                              </label>
+                              <input
+                                type="text"
+                                required
+                                value={eb.noBatch}
+                                onChange={(e) =>
+                                  handleExtraBatchChange(
+                                    row.id,
+                                    bIdx,
+                                    'noBatch',
+                                    e.target.value.toUpperCase()
+                                  )
+                                }
+                                placeholder="B260102"
+                                className="w-full text-sm font-mono bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                              />
+                            </div>
+
+                            <div className="sm:col-span-3">
+                              <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                                No. Box Awal <span className="text-red-500">*</span>
+                              </label>
+                              <input
+                                type="text"
+                                required
+                                value={eb.boxAwal}
+                                onChange={(e) =>
+                                  handleExtraBatchChange(
+                                    row.id,
+                                    bIdx,
+                                    'boxAwal',
+                                    e.target.value.toUpperCase()
+                                  )
+                                }
+                                placeholder="051"
+                                className="w-full text-sm font-mono bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                              />
+                            </div>
+
+                            <div className="sm:col-span-3">
+                              <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                                No. Box Akhir <span className="text-red-500">*</span>
+                              </label>
+                              <input
+                                type="text"
+                                required
+                                value={eb.boxAkhir}
+                                onChange={(e) =>
+                                  handleExtraBatchChange(
+                                    row.id,
+                                    bIdx,
+                                    'boxAkhir',
+                                    e.target.value.toUpperCase()
+                                  )
+                                }
+                                placeholder="070"
+                                className="w-full text-sm font-mono bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                              />
+                            </div>
+
+                            <div className="sm:col-span-1 flex justify-end">
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveExtraBatch(row.id, bIdx)}
+                                className="p-2 text-red-500 hover:bg-red-50 dark:hover:bg-red-950/40 rounded-lg transition-colors cursor-pointer"
+                                title={`Hapus Batch #${bIdx + 2}`}
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
                   {/* Petunjuk Total Box Otomatis dari Rentang No. Box */}
-                  {boxCalc && (
+                  {(validBatchCounts.length > 0 || hasAnyInvalidCalc) && (
                     <div className="mt-3 p-2.5 rounded-lg bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2 text-xs">
-                      {boxCalc.isValid ? (
+                      {!hasAnyInvalidCalc && validBatchCounts.length > 0 ? (
                         <>
                           <div className="flex flex-wrap items-center gap-2 text-emerald-800 dark:text-emerald-300">
                             <span className="font-bold flex items-center gap-1.5">
@@ -698,28 +891,38 @@ export const PalletInputForm: React.FC<PalletInputFormProps> = ({
                               Petunjuk Rentang Box:
                             </span>
                             <span className="font-extrabold font-mono text-xs sm:text-sm bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-200 px-2.5 py-0.5 rounded border border-emerald-300 dark:border-emerald-800">
-                              {boxCalc.totalBox} Box
+                              {combinedTotalBoxes} Box
                             </span>
-                            <span className="text-[11px] text-slate-500 font-mono">
-                              (No. #{boxCalc.startNum} s/d #{boxCalc.endNum})
-                            </span>
+                            {validBatchCounts.length === 1 ? (
+                              <span className="text-[11px] text-slate-500 font-mono">
+                                (No. #{validBatchCounts[0].calc.startNum} s/d #{validBatchCounts[0].calc.endNum})
+                              </span>
+                            ) : (
+                              <span className="text-[11px] text-slate-500 font-mono">
+                                (
+                                {validBatchCounts
+                                  .map((v) => `Batch #${v.batchNo}: ${v.count} Box`)
+                                  .join(' + ')}
+                                )
+                              </span>
+                            )}
                           </div>
 
-                          {String(row.qtyPallet) !== String(boxCalc.totalBox) && (
+                          {String(row.qtyPallet) !== String(combinedTotalBoxes) && (
                             <button
                               type="button"
-                              onClick={() => handleRowChange(row.id, 'qtyPallet', boxCalc.totalBox)}
-                              className="text-xs font-bold text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-950/60 hover:bg-blue-100 dark:hover:bg-blue-900/60 px-2.5 py-1 rounded border border-blue-200 dark:border-blue-800 transition-colors flex items-center gap-1"
+                              onClick={() => handleRowChange(row.id, 'qtyPallet', combinedTotalBoxes)}
+                              className="text-xs font-bold text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-950/60 hover:bg-blue-100 dark:hover:bg-blue-900/60 px-2.5 py-1 rounded border border-blue-200 dark:border-blue-800 transition-colors flex items-center gap-1 cursor-pointer"
                               title="Terapkan hasil hitungan box ke Qty / Pallet"
                             >
-                              <span>← Terapkan ke Qty ({boxCalc.totalBox} Box)</span>
+                              <span>← Terapkan ke Qty ({combinedTotalBoxes} Box)</span>
                             </button>
                           )}
                         </>
                       ) : (
                         <div className="flex items-center gap-1.5 text-amber-700 dark:text-amber-400 font-medium text-xs">
                           <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                          <span>{boxCalc.message}</span>
+                          <span>{firstInvalidMsg}</span>
                         </div>
                       )}
                     </div>

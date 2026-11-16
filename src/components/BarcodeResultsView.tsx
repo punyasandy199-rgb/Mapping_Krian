@@ -4,6 +4,7 @@ import { ThermalLabelCard } from './ThermalLabelCard';
 import { PrintLabelModal } from './PrintLabelModal';
 import { exportPalletsToCsv } from '../utils/exporter';
 import { downloadPalletLabelPdf } from '../utils/pdfGenerator';
+import { getPalletBatches } from '../utils/batchCalculator';
 import {
   Printer,
   FileDown,
@@ -245,10 +246,36 @@ export const BarcodeResultsView: React.FC<BarcodeResultsViewProps> = ({
                       {item.qtyPallet} {item.unit}
                     </td>
                     <td className="py-3 px-3 font-bold text-blue-700 dark:text-blue-400 text-[11px]">
-                      {item.noBatch || '-'}
+                      {(() => {
+                        const batches = getPalletBatches(item);
+                        if (batches.length > 1) {
+                          return (
+                            <div className="space-y-0.5">
+                              {batches.map((b, bIdx) => (
+                                <div key={bIdx}>{b.noBatch || '-'}</div>
+                              ))}
+                            </div>
+                          );
+                        }
+                        return item.noBatch || '-';
+                      })()}
                     </td>
                     <td className="py-3 px-3 text-slate-600 dark:text-slate-400 text-[11px]">
-                      {item.boxAwal || item.batchAwal || '-'} → {item.boxAkhir || item.batchAkhir || '-'}
+                      {(() => {
+                        const batches = getPalletBatches(item);
+                        if (batches.length > 1) {
+                          return (
+                            <div className="space-y-0.5">
+                              {batches.map((b, bIdx) => (
+                                <div key={bIdx}>
+                                  {b.boxAwal || '-'} → {b.boxAkhir || '-'}
+                                </div>
+                              ))}
+                            </div>
+                          );
+                        }
+                        return `${item.boxAwal || item.batchAwal || '-'} → ${item.boxAkhir || item.batchAkhir || '-'}`;
+                      })()}
                     </td>
                     <td className="py-3 px-3 text-center font-sans">
                       <div className="flex items-center justify-center gap-2">
