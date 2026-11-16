@@ -254,7 +254,7 @@ export const LocationPortalView: React.FC<LocationPortalViewProps> = ({
                           {groupRecordsCount} Data · {groupActiveBinsCount} Bin · {totalSuratJalan} SJ
                         </div>
                         <span className="inline-flex items-center gap-1.5 text-xs font-bold text-white group-hover:translate-x-0.5 transition-transform whitespace-nowrap shrink-0">
-                          <span>Pilih Gudang</span>
+                          <span>Buka Lokasi Bin</span>
                           <ArrowRight className="w-4 h-4" />
                         </span>
                       </div>
@@ -504,7 +504,7 @@ export const LocationPortalView: React.FC<LocationPortalViewProps> = ({
           <span>
             {selectedLocationGroup
               ? `Mapping ${selectedLocationGroup} · Klik gudang untuk melihat denah & peta Bin`
-              : 'Pilih Gd. KRIAN untuk akses Gudang 05 & Gudang 06'}
+              : 'Pilih Gd. KRIAN untuk langsung membuka lokasi Bin (Gudang 05, Gudang 06, dst.)'}
           </span>
         </div>
       </footer>

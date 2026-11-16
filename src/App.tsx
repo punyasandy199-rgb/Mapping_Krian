@@ -1054,6 +1054,17 @@ export default function App() {
         activeRackConfig.leftPrefix.startsWith('6'))
   );
 
+  // Daftar gudang dalam lokasi aktif (mis. Gd. KRIAN -> Gudang 05, Gudang 06, Gudang 07...)
+  const locationGroupWarehouses = activeWarehouse
+    ? masterWarehouses
+        .filter((w) => w.locationGroup === activeWarehouse.locationGroup)
+        .sort((a, b) =>
+          (a.namaGudang || a.kodeGudang).localeCompare(b.namaGudang || b.kodeGudang, undefined, {
+            numeric: true
+          })
+        )
+    : [];
+
   const notesCheckCount = records.filter(
     (r) => (r.keterangan || '').trim().length > 0
   ).length;
@@ -1153,14 +1164,35 @@ export default function App() {
     );
   }
 
-  // PORTAL VIEW (Level 1 SJA 3 / Gd. 137 / Gd. KRIAN -> Level 2 Sub-Lokasi Gudang 05 / Gudang 06)
+  // PORTAL VIEW (Level 1 SJA 3 / Gd. 137 / Gd. KRIAN -> langsung masuk Lokasi Bin & pilihan gudang di atas)
   if (!activeWarehouse) {
     return (
       <>
         <LocationPortalView
           masterWarehouses={masterWarehouses}
           selectedLocationGroup={portalLocationGroup}
-          onSelectLocationGroup={setPortalLocationGroup}
+          onSelectLocationGroup={(group) => {
+            if (!group) {
+              setPortalLocationGroup(null);
+              return;
+            }
+            const groupActiveList = masterWarehouses
+              .filter((w) => w.locationGroup === group && w.status === 'ACTIVE')
+              .sort((a, b) =>
+                (a.namaGudang || a.kodeGudang).localeCompare(
+                  b.namaGudang || b.kodeGudang,
+                  undefined,
+                  { numeric: true }
+                )
+              );
+            if (groupActiveList.length > 0) {
+              setPortalLocationGroup(group);
+              setActiveWarehouseId(groupActiveList[0].id);
+              setActiveTab('bin_map');
+            } else {
+              setPortalLocationGroup(group);
+            }
+          }}
           onSelectWarehouse={(wh) => {
             setActiveWarehouseId(wh.id);
             setPortalLocationGroup(wh.locationGroup);
@@ -1248,27 +1280,8 @@ export default function App() {
             </button>
           </div>
 
-          {/* Back to Sub-Location Mapping / Portal Button */}
-          <div className="mt-3 grid grid-cols-1 gap-1.5">
-            <button
-              type="button"
-              onClick={() => {
-                setPortalLocationGroup(activeWarehouse.locationGroup);
-                setActiveWarehouseId(null);
-                setIsMobileMenuOpen(false);
-              }}
-              className="w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-semibold bg-blue-50 dark:bg-blue-950/50 hover:bg-blue-100 dark:hover:bg-blue-900/50 text-blue-700 dark:text-blue-200 border border-blue-200 dark:border-blue-800 transition-colors cursor-pointer"
-              title={`Ganti sub-gudang di ${activeWarehouse.locationGroup}`}
-            >
-              <span className="flex items-center gap-2">
-                <Building2 className="w-3.5 h-3.5 text-blue-600 dark:text-cyan-400" />
-                <span>Ganti Gudang ({activeWarehouse.locationGroup})</span>
-              </span>
-              <span className="text-[10px] font-mono font-bold">
-                {activeWarehouse.kodeGudang}
-              </span>
-            </button>
-
+          {/* Back to Main Location Portal Button */}
+          <div className="mt-3">
             <button
               type="button"
               onClick={() => {
@@ -1276,11 +1289,11 @@ export default function App() {
                 setActiveWarehouseId(null);
                 setIsMobileMenuOpen(false);
               }}
-              className="w-full flex items-center justify-between px-3 py-1.5 rounded-lg text-[11px] font-semibold bg-slate-100 dark:bg-slate-800/80 hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 transition-colors cursor-pointer"
+              className="w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-semibold bg-slate-100 dark:bg-slate-800/80 hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 transition-colors cursor-pointer"
               title="Kembali ke pilihan lokasi Monitoring Produk IC — SJA 3"
             >
               <span className="flex items-center gap-2">
-                <ArrowLeft className="w-3 h-3 text-slate-500" />
+                <ArrowLeft className="w-3.5 h-3.5 text-slate-500" />
                 <span>Menu Lokasi Utama</span>
               </span>
               <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400">
@@ -1598,11 +1611,11 @@ export default function App() {
             <button
               type="button"
               onClick={() => {
-                setPortalLocationGroup(activeWarehouse.locationGroup);
+                setPortalLocationGroup(null);
                 setActiveWarehouseId(null);
               }}
               className="p-2 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200"
-              title="Ganti Gudang"
+              title="Kembali ke Menu Lokasi Utama"
             >
               <ArrowLeft className="w-4 h-4" />
             </button>
@@ -1623,16 +1636,16 @@ export default function App() {
           </div>
         </div>
 
-        {/* Top Breadcrumb & Page Banner */}
-        <header className="no-print bg-white/60 dark:bg-[#0f141c]/60 backdrop-blur-xs border-b border-slate-200 dark:border-slate-800 px-4 sm:px-6 lg:px-8 py-3.5 sticky top-0 z-20">
+        {/* Top Breadcrumb, Inline Warehouse Switcher & Page Banner */}
+        <header className="no-print bg-white/80 dark:bg-[#0f141c]/80 backdrop-blur-xs border-b border-slate-200 dark:border-slate-800 px-4 sm:px-6 lg:px-8 py-3 sticky top-0 z-20 space-y-2.5">
           <div className="max-w-7xl mx-auto flex flex-col sm:flex-row sm:items-center justify-between gap-2">
             <div>
               <div className="flex items-center gap-2 flex-wrap">
                 <h1 className="text-base font-extrabold text-slate-900 dark:text-white">
                   {tabTitles[activeTab]?.title || 'PalletTrack'}
                 </h1>
-                <span className="text-xs px-2 py-0.5 rounded-full font-semibold bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-900">
-                  {activeWarehouse.locationGroup} · {activeWarehouse.namaGudang}
+                <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">
+                  &middot; {activeWarehouse.locationGroup} &middot; {activeWarehouse.namaGudang}
                 </span>
               </div>
               <p className="text-xs text-slate-500 mt-0.5">
@@ -1641,16 +1654,89 @@ export default function App() {
             </div>
 
             {/* Quick Header Actions */}
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 shrink-0">
               <button
                 type="button"
                 onClick={() => setIsScannerOpen(true)}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-blue-600 hover:bg-blue-700 text-white shadow-xs transition-colors"
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-blue-600 hover:bg-blue-700 text-white shadow-xs transition-colors whitespace-nowrap shrink-0 cursor-pointer"
               >
                 <Search className="w-3.5 h-3.5" />
                 <span>Scan QR Bin</span>
               </button>
             </div>
+          </div>
+
+          {/* Pilihan Gudang Langsung di Bagian Atas (Gudang 05, Gudang 06, dan seterusnya) */}
+          <div className="max-w-7xl mx-auto pt-2 border-t border-slate-200/80 dark:border-slate-800/80 flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="inline-flex items-center gap-1.5 text-[11px] font-bold text-slate-600 dark:text-slate-300 mr-1 whitespace-nowrap">
+                <Building2 className="w-3.5 h-3.5 text-blue-600 dark:text-cyan-400" />
+                <span>Pilihan Gudang ({activeWarehouse.locationGroup}):</span>
+              </span>
+
+              <div className="flex flex-wrap items-center gap-1.5 p-1 rounded-xl bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+                {locationGroupWarehouses.map((wh) => {
+                  const cfg = getWarehouseRackSlots(wh);
+                  const isCurrent = wh.id === activeWarehouse.id;
+                  const isMaintenance = wh.status !== 'ACTIVE';
+                  const activePalletCount = records.filter((r) => {
+                    if (r.status === 'OUT') return false;
+                    const prefix = (r.lokasiBin || '').trim().toUpperCase().split('.')[0];
+                    return prefix === cfg.leftPrefix || prefix === cfg.rightPrefix;
+                  }).length;
+
+                  return (
+                    <button
+                      key={wh.id}
+                      type="button"
+                      onClick={() => {
+                        if (isMaintenance) {
+                          openMasterModal('gudang');
+                          return;
+                        }
+                        setActiveWarehouseId(wh.id);
+                      }}
+                      title={
+                        isMaintenance
+                          ? `${wh.namaGudang} berstatus Under Maintenance — klik untuk kelola di Master Gudang`
+                          : `Pindah ke ${wh.namaGudang} (Rak ${cfg.leftPrefix} & ${cfg.rightPrefix})`
+                      }
+                      className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap shrink-0 cursor-pointer ${
+                        isCurrent
+                          ? 'bg-blue-600 text-white shadow-xs'
+                          : isMaintenance
+                          ? 'bg-amber-50/70 dark:bg-amber-950/30 text-amber-700 dark:text-amber-300 hover:bg-amber-100'
+                          : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-blue-50 dark:hover:bg-slate-700 border border-slate-200/80 dark:border-slate-700'
+                      }`}
+                    >
+                      <span>{wh.namaGudang}</span>
+                      <span
+                        className={`text-[10px] font-mono tabular-nums ${
+                          isCurrent
+                            ? 'text-blue-100'
+                            : isMaintenance
+                            ? 'text-amber-600 dark:text-amber-400'
+                            : 'text-slate-400 dark:text-slate-400'
+                        }`}
+                      >
+                        {isMaintenance
+                          ? 'Maintenance'
+                          : `${cfg.leftPrefix}/${cfg.rightPrefix} · ${activePalletCount}`}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => openMasterModal('gudang')}
+              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              title="Tambah atau atur gudang baru di Master Gudang"
+            >
+              <span>+ Tambah / Atur Gudang</span>
+            </button>
           </div>
         </header>
 

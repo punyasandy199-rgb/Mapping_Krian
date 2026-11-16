@@ -105,6 +105,7 @@ export interface SuratJalanRecord {
   tglJamCetakCustom?: string; // Input khusus tanggal & jam cetak (opsional)
   waktuCetakFormatted?: string; // Timestamp cetak yang dicetak di surat jalan
   noPolisi: string;
+  noSpp?: string; // No. Surat Perintah Pengiriman
   noPo: string; // default '-'
   noKontainer?: string; // No. Kontainer armada/pengiriman
   noFaktur?: string; // No. Faktur pajak/penjualan

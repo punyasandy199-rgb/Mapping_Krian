@@ -36,7 +36,7 @@ import {
   X,
   PackagePlus
 } from 'lucide-react';
-import { SuratJalanPrintModal } from './SuratJalanPrintModal';
+import { SuratJalanPrintModal, SuratJalanPrintModel } from './SuratJalanPrintModal';
 import { getPalletBatches } from '../utils/batchCalculator';
 
 interface SuratJalanViewProps {
@@ -174,6 +174,7 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
   const [ppnPersen, setPpnPersen] = useState<number>(0);
   const [ppnInputText, setPpnInputText] = useState<string>('0');
 
+  const [noSpp, setNoSpp] = useState<string>('');
   const [noPo, setNoPo] = useState<string>('');
   const [noKontainer, setNoKontainer] = useState<string>('');
   const [noFaktur, setNoFaktur] = useState<string>('');
@@ -211,6 +212,7 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
   const [previewRecord, setPreviewRecord] = useState<SuratJalanRecord | null>(null);
   const [previewRecords, setPreviewRecords] = useState<SuratJalanRecord[]>([]);
   const [isPrintModalOpen, setIsPrintModalOpen] = useState<boolean>(false);
+  const [printModel, setPrintModel] = useState<SuratJalanPrintModel>('internal');
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -221,6 +223,14 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
   const [editError, setEditError] = useState<string | null>(null);
   const [isSavingEdit, setIsSavingEdit] = useState<boolean>(false);
   const [editSuccessMsg, setEditSuccessMsg] = useState<string | null>(null);
+
+  // Pencarian & Inline Input No. SPP / No. PO pada Riwayat Surat Jalan Terbit
+  const [historySearch, setHistorySearch] = useState<string>('');
+  const [historyDocFilter, setHistoryDocFilter] = useState<'ALL' | 'FILLED' | 'MISSING'>('ALL');
+  const [inlineDocEditId, setInlineDocEditId] = useState<string | null>(null);
+  const [inlineNoSpp, setInlineNoSpp] = useState<string>('');
+  const [inlineNoPo, setInlineNoPo] = useState<string>('');
+  const [isSavingInlineDoc, setIsSavingInlineDoc] = useState<boolean>(false);
 
   // Deduplicate masterRoutes by kodeLokasi & namaLokasi so dropdown never shows duplicate route names
   const uniqueMasterRoutes = useMemo(() => {
@@ -932,6 +942,7 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
           ...(customRaw ? { tglJamCetakCustom: customRaw } : {}),
           waktuCetakFormatted: formattedWaktuCetak,
           noPolisi: slot.noPolisi.trim().toUpperCase(),
+          noSpp: noSpp.trim() || '-',
           noPo: noPo.trim() || '-',
           noKontainer: noKontainer.trim() || '-',
           noFaktur: noFaktur.trim() || '-',
@@ -985,6 +996,7 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
           note: ''
         }
       ]);
+      setNoSpp('');
       setNoPo('');
       setNoKontainer('');
       setNoFaktur('');
@@ -1137,6 +1149,7 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
         ...editingRecord,
         noSuratJalan: editingRecord.noSuratJalan.trim(),
         noPolisi: editingRecord.noPolisi.trim().toUpperCase(),
+        noSpp: (editingRecord.noSpp || '').trim() || '-',
         noPo: editingRecord.noPo.trim() || '-',
         noKontainer: (editingRecord.noKontainer || '').trim() || '-',
         noFaktur: (editingRecord.noFaktur || '').trim() || '-',
@@ -1174,6 +1187,76 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
       setEditError('Terjadi kesalahan saat menyimpan perubahan Surat Jalan.');
     } finally {
       setIsSavingEdit(false);
+    }
+  };
+
+  // Filtered Riwayat Surat Jalan Terbit (pencarian No. SPP, No. PO, No. SJ, Nopol, Tujuan, Vendor, Driver, Barang)
+  const filteredSuratJalanHistory = useMemo(() => {
+    const q = historySearch.trim().toLowerCase();
+    return suratJalanHistory.filter((sj) => {
+      const sppVal = (sj.noSpp || '').trim();
+      const poVal = (sj.noPo || '').trim();
+      const hasSpp = Boolean(sppVal && sppVal !== '-');
+      const hasPo = Boolean(poVal && poVal !== '-');
+
+      if (historyDocFilter === 'FILLED' && (!hasSpp && !hasPo)) return false;
+      if (historyDocFilter === 'MISSING' && hasSpp && hasPo) return false;
+
+      if (!q) return true;
+
+      const itemsText = (sj.itemsSummary || [])
+        .map((it) =>
+          [
+            it.namaBarang,
+            it.kodeItem,
+            ...(it.nomorPalletList || []),
+            ...(it.noBatchList || [])
+          ].join(' ')
+        )
+        .join(' ')
+        .toLowerCase();
+
+      return (
+        (sj.noSuratJalan || '').toLowerCase().includes(q) ||
+        sppVal.toLowerCase().includes(q) ||
+        poVal.toLowerCase().includes(q) ||
+        (sj.noPolisi || '').toLowerCase().includes(q) ||
+        (sj.ruteTujuanKode || '').toLowerCase().includes(q) ||
+        (sj.ruteTujuanNama || '').toLowerCase().includes(q) ||
+        (sj.namaVendorArmada || '').toLowerCase().includes(q) ||
+        (sj.namaDriver || '').toLowerCase().includes(q) ||
+        (sj.noKontainer || '').toLowerCase().includes(q) ||
+        (sj.noFaktur || '').toLowerCase().includes(q) ||
+        (sj.noInvoice || '').toLowerCase().includes(q) ||
+        itemsText.includes(q)
+      );
+    });
+  }, [suratJalanHistory, historySearch, historyDocFilter]);
+
+  const handleStartInlineDocEdit = (sj: SuratJalanRecord) => {
+    setInlineDocEditId(sj.id);
+    setInlineNoSpp(sj.noSpp && sj.noSpp !== '-' ? sj.noSpp : '');
+    setInlineNoPo(sj.noPo && sj.noPo !== '-' ? sj.noPo : '');
+    setEditSuccessMsg(null);
+  };
+
+  const handleSaveInlineDocEdit = async (sj: SuratJalanRecord) => {
+    setIsSavingInlineDoc(true);
+    try {
+      const updatedRecord: SuratJalanRecord = {
+        ...sj,
+        noSpp: inlineNoSpp.trim() || '-',
+        noPo: inlineNoPo.trim() || '-'
+      };
+      await onSaveSuratJalan(updatedRecord);
+      setInlineDocEditId(null);
+      setEditSuccessMsg(
+        `No. SPP & No. PO untuk Surat Jalan ${sj.noSuratJalan} berhasil disimpan.`
+      );
+    } catch (err) {
+      console.error('Gagal menyimpan No. SPP / No. PO:', err);
+    } finally {
+      setIsSavingInlineDoc(false);
     }
   };
 
@@ -1300,18 +1383,31 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
 
               <div className="md:col-span-3">
                 <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  No. SPP
+                </label>
+                <input
+                  type="text"
+                  value={noSpp}
+                  onChange={(e) => setNoSpp(e.target.value)}
+                  placeholder="Masukkan No. SPP (opsional)"
+                  className="w-full font-mono bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-100"
+                />
+              </div>
+
+              {/* Row 2: No PO, No Kontainer, No Faktur, No Invoice */}
+              <div className="md:col-span-3">
+                <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
                   No. PO (Purchase Order)
                 </label>
                 <input
                   type="text"
                   value={noPo}
                   onChange={(e) => setNoPo(e.target.value)}
-                  placeholder="Masukkan No. PO (kosongkan jika tidak ada)"
-                  className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-100"
+                  placeholder="Masukkan No. PO (opsional)"
+                  className="w-full font-mono bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-100"
                 />
               </div>
 
-              {/* Row 2: No Kontainer, No Faktur, No Invoice, No Dokumen */}
               <div className="md:col-span-3">
                 <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
                   No. Kontainer
@@ -1348,18 +1444,6 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
                   onChange={(e) => setNoInvoice(e.target.value)}
                   placeholder="Masukkan No. Invoice..."
                   className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-100 font-mono"
-                />
-              </div>
-
-              <div className="md:col-span-3">
-                <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  No. Dokumen / Revisi
-                </label>
-                <input
-                  type="text"
-                  disabled
-                  value="F/SCM/01.08 (Rev. 05)"
-                  className="w-full bg-slate-100 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700/60 rounded-lg px-3 py-2 text-slate-500 font-mono"
                 />
               </div>
 
@@ -2451,8 +2535,38 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
                 </div>
               )}
 
-              {/* Submit action button */}
-              <div className="pt-1 flex justify-end">
+              {/* Submit action & print model selector */}
+              <div className="pt-2 flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 dark:border-slate-700">
+                <div className="flex flex-wrap items-center gap-2 text-xs">
+                  <span className="font-semibold text-slate-600 dark:text-slate-300">
+                    Model Cetak:
+                  </span>
+                  <div className="inline-flex items-center p-0.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700">
+                    <button
+                      type="button"
+                      onClick={() => setPrintModel('internal')}
+                      className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
+                        printModel === 'internal'
+                          ? 'bg-blue-600 text-white shadow-xs'
+                          : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                      }`}
+                    >
+                      Internal (21,5 × 14 cm)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPrintModel('external')}
+                      className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
+                        printModel === 'external'
+                          ? 'bg-slate-900 dark:bg-emerald-600 text-white shadow-xs'
+                          : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                      }`}
+                    >
+                      Eksternal (A4 Dot Matriks)
+                    </button>
+                  </div>
+                </div>
+
                 <button
                   type="button"
                   disabled={isSubmitting}
@@ -2477,19 +2591,81 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
       {/* SUB-TAB 2: RIWAYAT SURAT JALAN */}
       {activeSubTab === 'history' && (
         <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-xs space-y-4">
-          <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-slate-800">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 pb-3 border-b border-slate-200 dark:border-slate-800">
             <div>
               <h3 className="text-sm font-bold text-slate-900 dark:text-white">
                 Daftar Riwayat Surat Jalan Terbit
               </h3>
-              <p className="text-xs text-slate-500">
-                Semua dokumen pengiriman yang pernah dicetak dan diterbitkan
+              <p className="text-xs text-slate-500 mt-0.5">
+                Lengkapi tambahan No. SPP dan No. PO langsung pada Surat Jalan yang sudah terbit agar mudah dicari kembali.
               </p>
             </div>
-            <div className="text-xs text-slate-500">
-              Total: {suratJalanHistory.length} Surat Jalan
+            <div className="text-xs font-mono tabular-nums text-slate-500">
+              Menampilkan {filteredSuratJalanHistory.length} dari {suratJalanHistory.length} Surat Jalan
             </div>
           </div>
+
+          {/* Pencarian & Filter Data Surat Jalan Terbit */}
+          {suratJalanHistory.length > 0 && (
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-2.5">
+              <div className="relative flex-1 max-w-xl">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={historySearch}
+                  onChange={(e) => setHistorySearch(e.target.value)}
+                  placeholder="Cari No. SPP, No. PO, No. Surat Jalan, Nopol, Tujuan, Vendor, atau Barang..."
+                  className="w-full text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl pl-9 pr-8 py-2.5 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                {historySearch && (
+                  <button
+                    type="button"
+                    onClick={() => setHistorySearch('')}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 cursor-pointer"
+                    title="Hapus pencarian"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+
+              <div className="flex flex-wrap items-center gap-1 p-1 rounded-xl bg-slate-100 dark:bg-slate-800 text-xs font-semibold">
+                <button
+                  type="button"
+                  onClick={() => setHistoryDocFilter('ALL')}
+                  className={`px-3 py-1.5 rounded-lg transition-colors whitespace-nowrap cursor-pointer ${
+                    historyDocFilter === 'ALL'
+                      ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs'
+                      : 'text-slate-600 dark:text-slate-300 hover:text-slate-900'
+                  }`}
+                >
+                  Semua ({suratJalanHistory.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setHistoryDocFilter('MISSING')}
+                  className={`px-3 py-1.5 rounded-lg transition-colors whitespace-nowrap cursor-pointer ${
+                    historyDocFilter === 'MISSING'
+                      ? 'bg-amber-600 text-white shadow-xs'
+                      : 'text-slate-600 dark:text-slate-300 hover:text-slate-900'
+                  }`}
+                >
+                  Belum Lengkap SPP/PO
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setHistoryDocFilter('FILLED')}
+                  className={`px-3 py-1.5 rounded-lg transition-colors whitespace-nowrap cursor-pointer ${
+                    historyDocFilter === 'FILLED'
+                      ? 'bg-emerald-600 text-white shadow-xs'
+                      : 'text-slate-600 dark:text-slate-300 hover:text-slate-900'
+                  }`}
+                >
+                  Sudah Ada SPP/PO
+                </button>
+              </div>
+            </div>
+          )}
 
           {editSuccessMsg && (
             <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 text-xs font-semibold flex items-center justify-between gap-2">
@@ -2511,84 +2687,207 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
             <div className="py-12 text-center text-slate-500 text-xs">
               Belum ada riwayat Surat Jalan yang diterbitkan.
             </div>
+          ) : filteredSuratJalanHistory.length === 0 ? (
+            <div className="py-10 text-center space-y-2 bg-slate-50 dark:bg-slate-800/40 rounded-xl border border-dashed border-slate-200 dark:border-slate-700">
+              <Search className="w-8 h-8 text-slate-400 mx-auto" />
+              <p className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                Tidak ditemukan Surat Jalan dengan kata kunci "{historySearch || 'filter aktif'}".
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  setHistorySearch('');
+                  setHistoryDocFilter('ALL');
+                }}
+                className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-100 cursor-pointer"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>Reset Pencarian</span>
+              </button>
+            </div>
           ) : (
             <div className="overflow-x-auto border border-slate-200 dark:border-slate-800 rounded-xl">
               <table className="w-full text-left text-xs border-collapse">
                 <thead className="bg-slate-50 dark:bg-slate-800 sticky top-0 border-b border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300 font-semibold">
                   <tr>
                     <th className="py-2.5 px-3">No. Surat Jalan</th>
+                    <th className="py-2.5 px-3 min-w-[210px]">No. SPP &amp; No. PO</th>
                     <th className="py-2.5 px-3">Tanggal</th>
                     <th className="py-2.5 px-3">Rute Tujuan</th>
                     <th className="py-2.5 px-3">Nopol Kendaraan</th>
                     <th className="py-2.5 px-3">Vendor / Driver</th>
-                    <th className="py-2.5 px-3 text-center">Total Box</th>
-                    <th className="py-2.5 px-3 text-right">Total Berat (Kg)</th>
+                    <th className="py-2.5 px-3 text-right">Total Box &amp; Berat</th>
                     <th className="py-2.5 px-3 text-center w-44">Aksi</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                  {suratJalanHistory.map((sj) => (
-                    <tr key={sj.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors">
-                      <td className="py-2.5 px-3 font-mono font-bold text-blue-600 dark:text-blue-400">
-                        {sj.noSuratJalan}
-                      </td>
-                      <td className="py-2.5 px-3 font-medium text-slate-700 dark:text-slate-300">
-                        <div className="font-semibold">{sj.tanggalPengambilanFormatted || sj.tanggal}</div>
-                        {sj.waktuCetakFormatted && (
-                          <div className="text-[10px] text-slate-400 flex items-center gap-1 mt-0.5">
-                            <Clock className="w-3 h-3 text-slate-400" />
-                            <span>Cetak: {sj.waktuCetakFormatted}</span>
+                  {filteredSuratJalanHistory.map((sj) => {
+                    const isInlineEditing = inlineDocEditId === sj.id;
+                    const displaySpp = sj.noSpp && sj.noSpp.trim() !== '-' ? sj.noSpp.trim() : '';
+                    const displayPo = sj.noPo && sj.noPo.trim() !== '-' ? sj.noPo.trim() : '';
+
+                    return (
+                      <tr key={sj.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors">
+                        <td className="py-2.5 px-3 font-mono font-bold text-blue-600 dark:text-blue-400 whitespace-nowrap">
+                          {sj.noSuratJalan}
+                        </td>
+                        <td className="py-2.5 px-3">
+                          {isInlineEditing ? (
+                            <div className="space-y-1.5 min-w-[200px]">
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-[10px] font-bold text-slate-500 w-9 shrink-0">
+                                  SPP:
+                                </span>
+                                <input
+                                  type="text"
+                                  value={inlineNoSpp}
+                                  onChange={(e) => setInlineNoSpp(e.target.value)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') handleSaveInlineDocEdit(sj);
+                                    if (e.key === 'Escape') setInlineDocEditId(null);
+                                  }}
+                                  placeholder="Input No. SPP..."
+                                  autoFocus
+                                  className="flex-1 font-mono text-[11px] bg-white dark:bg-slate-900 border border-blue-400 dark:border-blue-600 rounded px-2 py-1 text-slate-900 dark:text-white focus:outline-none"
+                                />
+                              </div>
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-[10px] font-bold text-slate-500 w-9 shrink-0">
+                                  PO:
+                                </span>
+                                <input
+                                  type="text"
+                                  value={inlineNoPo}
+                                  onChange={(e) => setInlineNoPo(e.target.value)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') handleSaveInlineDocEdit(sj);
+                                    if (e.key === 'Escape') setInlineDocEditId(null);
+                                  }}
+                                  placeholder="Input No. PO..."
+                                  className="flex-1 font-mono text-[11px] bg-white dark:bg-slate-900 border border-blue-400 dark:border-blue-600 rounded px-2 py-1 text-slate-900 dark:text-white focus:outline-none"
+                                />
+                              </div>
+                              <div className="flex items-center gap-1.5 pt-0.5">
+                                <button
+                                  type="button"
+                                  disabled={isSavingInlineDoc}
+                                  onClick={() => handleSaveInlineDocEdit(sj)}
+                                  className="inline-flex items-center gap-1 px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-bold cursor-pointer disabled:opacity-50"
+                                >
+                                  <Save className="w-3 h-3" />
+                                  <span>{isSavingInlineDoc ? 'Simpan...' : 'Simpan'}</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={isSavingInlineDoc}
+                                  onClick={() => setInlineDocEditId(null)}
+                                  className="px-2 py-1 rounded bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 text-[10px] font-semibold cursor-pointer"
+                                >
+                                  Batal
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="space-y-1">
+                              <div className="font-mono text-[11px] tabular-nums">
+                                <span className="text-slate-400 mr-1">SPP:</span>
+                                <span
+                                  className={
+                                    displaySpp
+                                      ? 'font-bold text-slate-900 dark:text-white'
+                                      : 'text-slate-400 italic font-sans'
+                                  }
+                                >
+                                  {displaySpp || 'Belum diisi'}
+                                </span>
+                              </div>
+                              <div className="font-mono text-[11px] tabular-nums">
+                                <span className="text-slate-400 mr-1">PO:</span>
+                                <span
+                                  className={
+                                    displayPo
+                                      ? 'font-bold text-slate-900 dark:text-white'
+                                      : 'text-slate-400 italic font-sans'
+                                  }
+                                >
+                                  {displayPo || 'Belum diisi'}
+                                </span>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => handleStartInlineDocEdit(sj)}
+                                className="inline-flex items-center gap-1 text-[10px] font-bold text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
+                              >
+                                <Plus className="w-3 h-3" />
+                                <span>{displaySpp || displayPo ? 'Ubah SPP / PO' : 'Input SPP / PO'}</span>
+                              </button>
+                            </div>
+                          )}
+                        </td>
+                        <td className="py-2.5 px-3 font-medium text-slate-700 dark:text-slate-300 whitespace-nowrap">
+                          <div className="font-semibold tabular-nums">
+                            {sj.tanggalPengambilanFormatted || sj.tanggal}
                           </div>
-                        )}
-                      </td>
-                      <td className="py-2.5 px-3 font-medium text-slate-900 dark:text-white">
-                        <div className="font-bold">{sj.ruteTujuanKode}</div>
-                        <div className="text-[10px] text-slate-500 truncate max-w-xs">{sj.ruteTujuanNama}</div>
-                      </td>
-                      <td className="py-2.5 px-3 font-mono font-bold tracking-wider">
-                        {sj.noPolisi}
-                      </td>
-                      <td className="py-2.5 px-3">
-                        <div className="font-semibold text-slate-800 dark:text-slate-200">
-                          {sj.namaVendorArmada}
-                        </div>
-                        <div className="text-[10px] text-slate-500">
-                          {sj.namaDriver} ({sj.noHpDriver})
-                        </div>
-                      </td>
-                      <td className="py-2.5 px-3 text-center font-bold font-mono">
-                        {sj.grandTotalBox} Box
-                      </td>
-                      <td className="py-2.5 px-3 text-right font-bold font-mono text-emerald-600 dark:text-emerald-400">
-                        {sj.grandTotalKg.toLocaleString('id-ID')} Kg
-                      </td>
-                      <td className="py-2.5 px-3 text-center">
-                        <div className="flex items-center justify-center gap-1.5">
-                          <button
-                            type="button"
-                            onClick={() => handleOpenEditModal(sj)}
-                            className="flex items-center gap-1 px-2.5 py-1 text-xs font-semibold bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800 rounded-lg hover:bg-amber-100 transition-colors cursor-pointer"
-                            title="Edit Surat Jalan"
-                          >
-                            <Edit3 className="w-3.5 h-3.5" />
-                            <span>Edit</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setPreviewRecord(sj);
-                              setPreviewRecords([sj]);
-                              setIsPrintModalOpen(true);
-                            }}
-                            className="flex items-center gap-1 px-2.5 py-1 text-xs font-semibold bg-blue-50 dark:bg-blue-950 text-blue-600 dark:text-blue-400 rounded-lg hover:bg-blue-100 transition-colors cursor-pointer"
-                          >
-                            <Printer className="w-3.5 h-3.5" />
-                            <span>Cetak Ulang</span>
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
+                          {sj.waktuCetakFormatted && (
+                            <div className="text-[10px] text-slate-400 flex items-center gap-1 mt-0.5 tabular-nums">
+                              <Clock className="w-3 h-3 text-slate-400" />
+                              <span>Cetak: {sj.waktuCetakFormatted}</span>
+                            </div>
+                          )}
+                        </td>
+                        <td className="py-2.5 px-3 font-medium text-slate-900 dark:text-white">
+                          <div className="font-bold">{sj.ruteTujuanKode}</div>
+                          <div className="text-[10px] text-slate-500 truncate max-w-[200px]">
+                            {sj.ruteTujuanNama}
+                          </div>
+                        </td>
+                        <td className="py-2.5 px-3 font-mono font-bold tracking-wider whitespace-nowrap">
+                          {sj.noPolisi}
+                        </td>
+                        <td className="py-2.5 px-3">
+                          <div className="font-semibold text-slate-800 dark:text-slate-200">
+                            {sj.namaVendorArmada}
+                          </div>
+                          <div className="text-[10px] text-slate-500">
+                            {sj.namaDriver || '-'} {sj.noHpDriver ? `(${sj.noHpDriver})` : ''}
+                          </div>
+                        </td>
+                        <td className="py-2.5 px-3 text-right font-mono tabular-nums whitespace-nowrap">
+                          <div className="font-bold text-slate-900 dark:text-white">
+                            {sj.grandTotalBox} Box
+                          </div>
+                          <div className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400">
+                            {sj.grandTotalKg.toLocaleString('id-ID')} Kg
+                          </div>
+                        </td>
+                        <td className="py-2.5 px-3 text-center">
+                          <div className="flex items-center justify-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => handleOpenEditModal(sj)}
+                              className="flex items-center gap-1 px-2.5 py-1 text-xs font-semibold bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800 rounded-lg hover:bg-amber-100 transition-colors cursor-pointer whitespace-nowrap"
+                              title="Edit Surat Jalan"
+                            >
+                              <Edit3 className="w-3.5 h-3.5" />
+                              <span>Edit</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setPreviewRecord(sj);
+                                setPreviewRecords([sj]);
+                                setIsPrintModalOpen(true);
+                              }}
+                              className="flex items-center gap-1 px-2.5 py-1 text-xs font-semibold bg-blue-50 dark:bg-blue-950 text-blue-600 dark:text-blue-400 rounded-lg hover:bg-blue-100 transition-colors cursor-pointer whitespace-nowrap"
+                            >
+                              <Printer className="w-3.5 h-3.5" />
+                              <span>Cetak Ulang</span>
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -2663,6 +2962,21 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
 
                 <div>
                   <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    No. SPP
+                  </label>
+                  <input
+                    type="text"
+                    value={editingRecord.noSpp === '-' ? '' : editingRecord.noSpp || ''}
+                    onChange={(e) =>
+                      setEditingRecord({ ...editingRecord, noSpp: e.target.value })
+                    }
+                    placeholder="Masukkan No. SPP..."
+                    className="w-full font-mono bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
                     No. PO
                   </label>
                   <input
@@ -2671,8 +2985,8 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
                     onChange={(e) =>
                       setEditingRecord({ ...editingRecord, noPo: e.target.value })
                     }
-                    placeholder="-"
-                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2"
+                    placeholder="Masukkan No. PO..."
+                    className="w-full font-mono bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2"
                   />
                 </div>
 
@@ -3094,6 +3408,10 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
         record={previewRecord}
         records={previewRecords}
         palletRecords={records}
+        masterItems={masterItems}
+        masterRoutes={masterRoutes}
+        initialPrintModel={printModel}
+        onPrintModelChange={setPrintModel}
       />
     </div>
   );

@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   PalletRecord,
   MasterWarehouse,
@@ -23,6 +23,11 @@ export const WarehouseBinViewer: React.FC<WarehouseBinViewerProps> = ({
   const warehouseName = activeWarehouse?.namaGudang || 'Gudang 05';
   const isGudang6 =
     warehouseName.toLowerCase().includes('6') || rackConfig.leftPrefix.startsWith('6');
+
+  useEffect(() => {
+    setSelectedBin(null);
+    setRangeFilter('all');
+  }, [activeWarehouse?.id]);
 
   // Group records by bin location (e.g., "5A.1", "6A.1")
   const binMap = useMemo(() => {

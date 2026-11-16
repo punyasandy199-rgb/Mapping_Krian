@@ -150,6 +150,33 @@
         "namaGudang",
         "status"
       ]
+    },
+    "SuratJalanRecord": {
+      "title": "SuratJalanRecord",
+      "description": "Issued delivery note (Form F/SCM/01.08) with optional SPP/PO numbers and pallet summary",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "noSuratJalan": { "type": "string" },
+        "tanggal": { "type": "string" },
+        "noPolisi": { "type": "string" },
+        "noSpp": { "type": "string" },
+        "noPo": { "type": "string" },
+        "noKontainer": { "type": "string" },
+        "noFaktur": { "type": "string" },
+        "noInvoice": { "type": "string" },
+        "ruteTujuanKode": { "type": "string" },
+        "namaVendorArmada": { "type": "string" },
+        "grandTotalBox": { "type": "number" },
+        "grandTotalKg": { "type": "number" },
+        "createdAt": { "type": "string" }
+      },
+      "required": [
+        "id",
+        "noSuratJalan",
+        "noPolisi",
+        "createdAt"
+      ]
     }
   },
   "firestore": {
@@ -188,6 +215,12 @@
         "$ref": "#/entities/MasterWarehouse"
       },
       "description": "Warehouse locations and sub-locations"
+    },
+    "/surat_jalan_records/{suratId}": {
+      "schema": {
+        "$ref": "#/entities/SuratJalanRecord"
+      },
+      "description": "Issued delivery notes (Surat Jalan) synced across warehouse devices"
     }
   }
 }
