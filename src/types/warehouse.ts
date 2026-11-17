@@ -139,9 +139,14 @@ export interface PalletBatchEntry {
   qtyBox?: number;
 }
 
+export const PALLET_QC_STATUSES = ['OK', 'BO', 'HOLD'] as const;
+
+export type PalletQcStatus = typeof PALLET_QC_STATUSES[number];
+
 export interface PalletRowInput {
   id: string;
   nomorPallet: string; // Nomor pallet di setiap item (selalu kosong di awal)
+  statusQc?: PalletQcStatus; // Status kondisi pallet: default 'OK', pilihan 'OK' | 'BO' | 'HOLD'
   kodeItem: string;
   namaBarang: string;
   qtyPallet: string | number;
@@ -154,6 +159,23 @@ export interface PalletRowInput {
   extraBatches?: PalletBatchEntry[]; // Batch tambahan (Batch ke-2, ke-3, dst) dalam 1 pallet
   keterangan?: string;
 }
+
+export interface WarehouseTransferEntry {
+  dariGudang: string;
+  keGudang: string;
+  tanggalOper: string;
+  binBaru?: string;
+  petugas?: string;
+  catatan?: string;
+}
+
+export const CANONICAL_WAREHOUSE_LOCATIONS = [
+  'Gd Krian',
+  'SJA 3 (SJA Sukodono)',
+  'Gd 137'
+] as const;
+
+export type CanonicalWarehouseLocation = typeof CANONICAL_WAREHOUSE_LOCATIONS[number];
 
 export interface PalletRecord {
   id: string;
@@ -172,6 +194,10 @@ export interface PalletRecord {
   batchAkhir?: string; // kompatibilitas
   batches?: PalletBatchEntry[]; // Daftar seluruh batch & no box dalam 1 pallet (jika >= 1 batch)
   lokasiBin: string; // 1x input applied to all rows in pallet
+  lokasiGudang?: string; // 'Gd Krian' | 'SJA 3 (SJA Sukodono)' | 'Gd 137'
+  gudangAsal?: string; // Asal awal stock (mis: 'SJA 3 (SJA Sukodono)')
+  operHistory?: WarehouseTransferEntry[]; // Riwayat oper gudang (maks. 2x: SJA 3 -> Gd 137/Krian -> SJA 3)
+  statusQc?: PalletQcStatus; // Status pallet (OK | BO | HOLD), data lama otomatis dianggap 'OK'
   keterangan?: string;
   submittedAt: string;
   updatedAt?: string; // Timestamp terakhir kali data pallet ini diupdate
@@ -518,6 +544,103 @@ export function resolveWarehouseForBin(
     if (matched) return matched;
   }
   return fallback || warehouses[0] || DEFAULT_MASTER_WAREHOUSES[0];
+}
+
+export function mapGroupToCanonicalWarehouse(group?: string): string {
+  const val = (group || '').trim();
+  if (!val) return 'Gd Krian';
+  if (/137/i.test(val)) return 'Gd 137';
+  if (/sukodono|sja\s*3/i.test(val)) return 'SJA 3 (SJA Sukodono)';
+  if (/krian/i.test(val)) return 'Gd Krian';
+  return val;
+}
+
+export function resolvePalletWarehouseLocation(
+  record: Pick<PalletRecord, 'lokasiBin' | 'lokasiGudang'>,
+  warehouses: MasterWarehouse[] = DEFAULT_MASTER_WAREHOUSES
+): string {
+  if (record.lokasiGudang && record.lokasiGudang.trim()) {
+    return mapGroupToCanonicalWarehouse(record.lokasiGudang);
+  }
+  const upperBin = (record.lokasiBin || '').trim().toUpperCase();
+  if (/^(SJA3|SUKODONO)/.test(upperBin)) return 'SJA 3 (SJA Sukodono)';
+  if (/^(137|GD\.?\s*137)/.test(upperBin)) return 'Gd 137';
+
+  const prefix = upperBin.split('.')[0];
+  if (prefix && warehouses.length > 0) {
+    const matched = warehouses.find((w) => {
+      const l = (w.rackLeftPrefix || '').trim().toUpperCase();
+      const r = (w.rackRightPrefix || '').trim().toUpperCase();
+      return l === prefix || r === prefix;
+    });
+    if (matched) {
+      return mapGroupToCanonicalWarehouse(matched.locationGroup);
+    }
+  }
+  return 'Gd Krian';
+}
+
+export function isSukodonoDestination(destination?: string): boolean {
+  return /sukodono|sja\s*3/i.test((destination || '').trim());
+}
+
+export function computePalletStockStatus(
+  record: Pick<PalletRecord, 'status' | 'tujuanPengambilan'>,
+  sj?: { ruteTujuanKode?: string; ruteTujuanNama?: string } | null
+): 'Ada' | 'Habis' {
+  const dest = (
+    sj?.ruteTujuanKode ||
+    sj?.ruteTujuanNama ||
+    record.tujuanPengambilan ||
+    ''
+  ).trim();
+
+  if (record.status !== 'OUT' && !sj) {
+    return 'Ada';
+  }
+  if (dest && isSukodonoDestination(dest)) {
+    return 'Ada';
+  }
+  return 'Habis';
+}
+
+export function resolvePalletQcStatus(
+  record?: Pick<PalletRecord, 'statusQc'> | null
+): PalletQcStatus {
+  const val = String(record?.statusQc || '')
+    .trim()
+    .toUpperCase();
+  if (val === 'BO' || val === 'HOLD' || val === 'OK') {
+    return val;
+  }
+  return 'OK';
+}
+
+export function deriveAsalPacking(noBatch?: string): string {
+  const raw = (noBatch || '').trim().toUpperCase();
+  if (!raw || raw === '-') return '-';
+
+  const segments = raw
+    .split(/\s*[,;|]\s*|\s+\/\s+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  if (segments.length > 1) {
+    const labels = Array.from(
+      new Set(
+        segments
+          .map((seg) =>
+            seg.startsWith('A') ? 'Packing 1' : seg.startsWith('B') ? 'Packing 2' : ''
+          )
+          .filter(Boolean)
+      )
+    );
+    if (labels.length > 0) return labels.join(' / ');
+  }
+
+  if (raw.startsWith('A')) return 'Packing 1';
+  if (raw.startsWith('B')) return 'Packing 2';
+  return '-';
 }
 
 

@@ -1,4 +1,10 @@
-import { PalletRecord } from '../types/warehouse';
+import {
+  PalletRecord,
+  resolvePalletWarehouseLocation,
+  computePalletStockStatus,
+  resolvePalletQcStatus,
+  deriveAsalPacking
+} from '../types/warehouse';
 import {
   formatPalletBatchNumbers,
   formatPalletBoxRanges,
@@ -17,7 +23,17 @@ export function exportPalletsToCsv(records: PalletRecord[], filenamePrefix = 'da
   const headers = [
     'No Barcode',
     'Nomor Pallet',
+    'Status In/Out',
+    'Asal Packing',
+    'Status',
+    'Status Stok',
     'Lokasi Bin',
+    'Lokasi Gudang',
+    'Gudang Asal',
+    'Oper Gudang 1 (Dari -> Ke)',
+    'Tgl Oper Gudang 1',
+    'Oper Gudang 2 (Dari -> Ke)',
+    'Tgl Oper Gudang 2',
     'Kode Item',
     'Nama Barang',
     'Qty per Pallet',
@@ -39,20 +55,34 @@ export function exportPalletsToCsv(records: PalletRecord[], filenamePrefix = 'da
 
   const rows = records.map((item) => {
     const batches = getPalletBatches(item);
+    const batchText = formatPalletBatchNumbers(item);
     const multiDetail =
       batches.length > 1
         ? batches.map((b) => `${b.noBatch || '-'} (${b.boxAwal || '-'}-${b.boxAkhir || '-'})`).join('; ')
         : formatPalletBoxRanges(item);
 
+    const op1 = item.operHistory?.[0];
+    const op2 = item.operHistory?.[1];
+
     return [
       escapeCsv(item.barcodeNumber),
       escapeCsv(item.nomorPallet || '-'),
+      escapeCsv(item.status === 'OUT' ? 'OUT' : 'IN'),
+      escapeCsv(deriveAsalPacking(batchText)),
+      escapeCsv(resolvePalletQcStatus(item)),
+      escapeCsv(computePalletStockStatus(item)),
       escapeCsv(item.lokasiBin),
+      escapeCsv(resolvePalletWarehouseLocation(item)),
+      escapeCsv(item.gudangAsal || op1?.dariGudang || '-'),
+      escapeCsv(op1 ? `${op1.dariGudang} -> ${op1.keGudang}` : '-'),
+      escapeCsv(op1?.tanggalOper ? new Date(op1.tanggalOper).toLocaleString('id-ID') : '-'),
+      escapeCsv(op2 ? `${op2.dariGudang} -> ${op2.keGudang}` : '-'),
+      escapeCsv(op2?.tanggalOper ? new Date(op2.tanggalOper).toLocaleString('id-ID') : '-'),
       escapeCsv(item.kodeItem || '-'),
       escapeCsv(item.namaBarang),
       item.qtyPallet,
       escapeCsv(item.unit || 'Box'),
-      escapeCsv(formatPalletBatchNumbers(item)),
+      escapeCsv(batchText),
       escapeCsv(item.boxAwal || item.batchAwal || '-'),
       escapeCsv(item.boxAkhir || item.batchAkhir || '-'),
       escapeCsv(multiDetail),

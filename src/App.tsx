@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { User } from 'firebase/auth';
 import {
   PalletRecord,
   PalletBatchEntry,
@@ -21,7 +22,9 @@ import {
   DEFAULT_WAREHOUSE_USERS,
   DEFAULT_MASTER_WAREHOUSES,
   getWarehouseRackSlots,
-  resolveWarehouseForBin
+  resolveWarehouseForBin,
+  mapGroupToCanonicalWarehouse,
+  resolvePalletQcStatus
 } from './types/warehouse';
 import { PalletInputForm } from './components/PalletInputForm';
 import { BarcodeResultsView } from './components/BarcodeResultsView';
@@ -36,6 +39,23 @@ import { PrintBinManifestModal } from './components/PrintBinManifestModal';
 import { DataBackupModal } from './components/DataBackupModal';
 import { SuratJalanView } from './components/SuratJalanView';
 import { LocationPortalView } from './components/LocationPortalView';
+import {
+  GoogleSheetsSyncView,
+  SyncActivityLogItem
+} from './components/GoogleSheetsSyncView';
+import {
+  DEFAULT_SPREADSHEET_URL,
+  DEFAULT_APPS_SCRIPT_SECRET,
+  SyncAllResult,
+  initGoogleSheetsAuth,
+  signInWithGoogleSheets,
+  signOutGoogleSheets,
+  getGoogleSheetsAccessToken,
+  syncAllDataToSpreadsheet,
+  syncAllDataViaAppsScript,
+  isValidAppsScriptUrl,
+  extractSpreadsheetId
+} from './services/googleSheets';
 import { generatePalletBarcode } from './utils/code128';
 import { calculateBatchBoxCount } from './utils/batchCalculator';
 import { computeReorderedBinEntries } from './utils/binSorting';
@@ -72,7 +92,11 @@ import {
   deleteWarehouseUser,
   subscribeToSuratJalanRecords,
   saveSuratJalanRecord,
-  updateSuratJalanRecord
+  updateSuratJalanRecord,
+  SheetsSyncMode,
+  SheetsBridgeConfig,
+  subscribeToSheetsBridgeConfig,
+  saveSheetsBridgeConfig
 } from './services/firebase';
 import {
   Boxes,
@@ -96,7 +120,8 @@ import {
   ArrowLeft,
   ClipboardCheck,
   Building2,
-  CalendarClock
+  CalendarClock,
+  FileSpreadsheet
 } from 'lucide-react';
 
 // Storage Keys
@@ -386,6 +411,7 @@ export default function App() {
     | 'notes_check'
     | 'update_monitor'
     | 'surat_jalan'
+    | 'google_sheets'
   >('input');
 
   // Master Data & User Management State
@@ -418,6 +444,51 @@ export default function App() {
   const [isBinModalOpen, setIsBinModalOpen] = useState(false);
   const [isPrintManifestOpen, setIsPrintManifestOpen] = useState(false);
   const [isCloudConnected, setIsCloudConnected] = useState(false);
+
+  // Google Sheets Integration State (Cara B: Shared Apps Script Bridge 24/7 + Cara A: OAuth Token in memory)
+  const [syncMode, setSyncMode] = useState<SheetsSyncMode>('apps_script');
+  const [appsScriptUrl, setAppsScriptUrl] = useState<string>('');
+  const [appsScriptSecret, setAppsScriptSecret] = useState<string>(DEFAULT_APPS_SCRIPT_SECRET);
+  const [isBridgeSavedInCloud, setIsBridgeSavedInCloud] = useState<boolean>(false);
+  const [cloudBridgeLastSyncedAt, setCloudBridgeLastSyncedAt] = useState<string | null>(null);
+
+  const [googleUser, setGoogleUser] = useState<User | null>(null);
+  const [needsGoogleAuth, setNeedsGoogleAuth] = useState<boolean>(true);
+  const [isGoogleLoggingIn, setIsGoogleLoggingIn] = useState<boolean>(false);
+  const [spreadsheetInput, setSpreadsheetInput] = useState<string>(() => {
+    try {
+      return localStorage.getItem('pallettrack_gsheets_url_v1') || DEFAULT_SPREADSHEET_URL;
+    } catch {
+      return DEFAULT_SPREADSHEET_URL;
+    }
+  });
+  const [selectedSheetTab, setSelectedSheetTab] = useState<string>(() => {
+    try {
+      return localStorage.getItem('pallettrack_gsheets_tab_v1') || '';
+    } catch {
+      return '';
+    }
+  });
+  const [includeSuratJalanTab, setIncludeSuratJalanTab] = useState<boolean>(true);
+  const [includeManualSjTab, setIncludeManualSjTab] = useState<boolean>(true);
+  const [manualSjSpreadsheetInput, setManualSjSpreadsheetInput] = useState<string>(() => {
+    try {
+      return localStorage.getItem('pallettrack_gsheets_manual_sj_url_v1') || '';
+    } catch {
+      return '';
+    }
+  });
+  const [includeRekapTab, setIncludeRekapTab] = useState<boolean>(true);
+  const [autoSyncEnabled, setAutoSyncEnabled] = useState<boolean>(false);
+  const [isSheetsBannerDismissed, setIsSheetsBannerDismissed] = useState<boolean>(false);
+  const [isSyncingSheets, setIsSyncingSheets] = useState<boolean>(false);
+  const [lastSyncResult, setLastSyncResult] = useState<SyncAllResult | null>(null);
+  const [sheetsSyncError, setSheetsSyncError] = useState<string | null>(null);
+  const [pendingSyncCount, setPendingSyncCount] = useState<number>(0);
+  const [syncActivityLogs, setSyncActivityLogs] = useState<SyncActivityLogItem[]>([]);
+  const [localMutationVersion, setLocalMutationVersion] = useState<number>(0);
+  const lastSyncedDigestRef = useRef<string>('');
+  const lastSyncedLocalVersionRef = useRef<number>(0);
 
   // Sync dark class on document element
   useEffect(() => {
@@ -525,6 +596,33 @@ export default function App() {
       }
     });
 
+    // 10. Subscribe to Shared Google Sheets Bridge Settings (for 24/7 no-login operator sync)
+    const unsubscribeBridge = subscribeToSheetsBridgeConfig((cfg) => {
+      if (!cfg) return;
+      setSyncMode(cfg.syncMode || 'apps_script');
+      setAppsScriptUrl(cfg.appsScriptUrl || '');
+      setAppsScriptSecret(cfg.appsScriptSecret || DEFAULT_APPS_SCRIPT_SECRET);
+      if (cfg.spreadsheetUrl) setSpreadsheetInput(cfg.spreadsheetUrl);
+      if (cfg.palletTabTitle !== undefined) setSelectedSheetTab(cfg.palletTabTitle);
+      if (cfg.includeSuratJalanTab !== undefined) {
+        setIncludeSuratJalanTab(cfg.includeSuratJalanTab);
+      }
+      if (cfg.includeManualSjTab !== undefined) {
+        setIncludeManualSjTab(cfg.includeManualSjTab);
+      }
+      if (cfg.manualSjSpreadsheetUrl !== undefined) {
+        setManualSjSpreadsheetInput(cfg.manualSjSpreadsheetUrl);
+      }
+      if (cfg.includeRekapTab !== undefined) {
+        setIncludeRekapTab(cfg.includeRekapTab);
+      }
+      setIsBridgeSavedInCloud(Boolean(cfg.appsScriptUrl && isValidAppsScriptUrl(cfg.appsScriptUrl)));
+      setCloudBridgeLastSyncedAt(cfg.lastSyncedAt || null);
+      if ((cfg.syncMode || 'apps_script') === 'apps_script') {
+        setAutoSyncEnabled(Boolean(cfg.autoSync24x7Enabled));
+      }
+    });
+
     return () => {
       unsubscribeRecords();
       unsubscribeMaster();
@@ -535,6 +633,7 @@ export default function App() {
       unsubscribeUsers();
       unsubscribeSuratJalan();
       unsubscribeWarehouses();
+      unsubscribeBridge();
     };
   }, []);
 
@@ -580,6 +679,316 @@ export default function App() {
       localStorage.setItem(WAREHOUSE_STORAGE_KEYS[0], JSON.stringify(masterWarehouses));
     } catch (e) {}
   }, [masterWarehouses]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('pallettrack_gsheets_url_v1', spreadsheetInput);
+    } catch (e) {}
+  }, [spreadsheetInput]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('pallettrack_gsheets_tab_v1', selectedSheetTab);
+    } catch (e) {}
+  }, [selectedSheetTab]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('pallettrack_gsheets_manual_sj_url_v1', manualSjSpreadsheetInput);
+    } catch (e) {}
+  }, [manualSjSpreadsheetInput]);
+
+  // Initialize Google Sheets OAuth listener
+  useEffect(() => {
+    const unsub = initGoogleSheetsAuth(
+      (user) => {
+        setGoogleUser(user);
+        setNeedsGoogleAuth(false);
+      },
+      (user) => {
+        setGoogleUser(user);
+        setNeedsGoogleAuth(true);
+      }
+    );
+    return () => unsub();
+  }, []);
+
+  const computeDataDigest = useCallback(() => {
+    const recSig = records
+      .map(
+        (r) =>
+          `${r.id}:${r.updatedAt || r.submittedAt}:${r.qtyPallet}:${r.noBatch || ''}:${resolvePalletQcStatus(
+            r
+          )}:${r.status || 'IN'}:${
+            r.tujuanPengambilan || ''
+          }:${r.lokasiBin}:${r.lokasiGudang || ''}:${r.gudangAsal || ''}:${(r.operHistory || [])
+            .map((o) => `${o.dariGudang}>${o.keGudang}@${o.tanggalOper}`)
+            .join(';')}:${r.binOrder ?? ''}:${r.keterangan || ''}:${r.noSuratJalan || ''}`
+      )
+      .sort()
+      .join('|');
+    const sjSig = suratJalanHistory
+      .map(
+        (s) =>
+          `${s.id}:${s.noSuratJalan}:${s.noSpp || ''}:${s.noPo || ''}:${s.noPolisi || ''}:${
+            s.namaVendorArmada || ''
+          }:${s.namaDriver || ''}:${s.noKontainer || ''}:${s.noFaktur || ''}:${
+            s.noInvoice || ''
+          }:${s.ruteTujuanNama || ''}:${s.tarifTotal ?? ''}:${s.grandTotalBox}:${
+            (s.itemsSummary || []).length
+          }:${s.createdAt}`
+      )
+      .sort()
+      .join('|');
+    return `${recSig}##${sjSig}`;
+  }, [records, suratJalanHistory]);
+
+  const appendSyncLog = useCallback(
+    (mode: 'Manual' | 'Otomatis' | 'Audit', summary: string, status: 'success' | 'error') => {
+      setSyncActivityLogs((prev) =>
+        [
+          {
+            id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            time: new Date().toISOString(),
+            mode,
+            summary,
+            status
+          },
+          ...prev
+        ].slice(0, 30)
+      );
+    },
+    []
+  );
+
+  const persistBridgeConfigToCloud = useCallback(
+    async (overrides: Partial<SheetsBridgeConfig> = {}) => {
+      const config: SheetsBridgeConfig = {
+        syncMode: overrides.syncMode ?? syncMode,
+        appsScriptUrl: (overrides.appsScriptUrl ?? appsScriptUrl).trim(),
+        appsScriptSecret: overrides.appsScriptSecret ?? appsScriptSecret,
+        spreadsheetUrl: overrides.spreadsheetUrl ?? spreadsheetInput,
+        palletTabTitle: overrides.palletTabTitle ?? selectedSheetTab,
+        includeSuratJalanTab: overrides.includeSuratJalanTab ?? includeSuratJalanTab,
+        includeManualSjTab: overrides.includeManualSjTab ?? includeManualSjTab,
+        manualSjSpreadsheetUrl: (
+          overrides.manualSjSpreadsheetUrl ?? manualSjSpreadsheetInput
+        ).trim(),
+        includeRekapTab: overrides.includeRekapTab ?? includeRekapTab,
+        autoSync24x7Enabled: overrides.autoSync24x7Enabled ?? autoSyncEnabled,
+        lastSyncedAt: overrides.lastSyncedAt ?? cloudBridgeLastSyncedAt ?? undefined,
+        updatedAt: new Date().toISOString()
+      };
+      await saveSheetsBridgeConfig(config);
+      setIsBridgeSavedInCloud(Boolean(config.appsScriptUrl && isValidAppsScriptUrl(config.appsScriptUrl)));
+    },
+    [
+      syncMode,
+      appsScriptUrl,
+      appsScriptSecret,
+      spreadsheetInput,
+      selectedSheetTab,
+      includeSuratJalanTab,
+      includeManualSjTab,
+      manualSjSpreadsheetInput,
+      includeRekapTab,
+      autoSyncEnabled,
+      cloudBridgeLastSyncedAt
+    ]
+  );
+
+  const executeSheetsSync = useCallback(
+    async (mode: 'Manual' | 'Otomatis'): Promise<SyncAllResult> => {
+      setIsSyncingSheets(true);
+      setSheetsSyncError(null);
+      try {
+        const manualTargetId = manualSjSpreadsheetInput.trim()
+          ? extractSpreadsheetId(manualSjSpreadsheetInput)
+          : '';
+        const result =
+          syncMode === 'apps_script'
+            ? await syncAllDataViaAppsScript({
+                scriptUrl: appsScriptUrl,
+                secret: appsScriptSecret,
+                spreadsheetId: extractSpreadsheetId(spreadsheetInput),
+                palletTabTitle: selectedSheetTab,
+                records,
+                suratJalanHistory,
+                masterItems,
+                masterWarehouses,
+                syncSuratJalanTab: includeSuratJalanTab,
+                syncManualSjTab: includeManualSjTab,
+                manualSjSpreadsheetId: manualTargetId,
+                syncRekapTab: includeRekapTab
+              })
+            : await syncAllDataToSpreadsheet({
+                spreadsheetId: extractSpreadsheetId(spreadsheetInput),
+                palletTabTitle: selectedSheetTab,
+                records,
+                suratJalanHistory,
+                masterItems,
+                masterWarehouses,
+                syncSuratJalanTab: includeSuratJalanTab,
+                syncManualSjTab: includeManualSjTab,
+                manualSjSpreadsheetId: manualTargetId,
+                syncRekapTab: includeRekapTab
+              });
+        setLastSyncResult(result);
+        setCloudBridgeLastSyncedAt(result.syncedAt);
+        if (
+          result.palletTabTitle &&
+          (!selectedSheetTab ||
+            /^sheet\s*1$/i.test(selectedSheetTab.trim()) ||
+            selectedSheetTab !== result.palletTabTitle)
+        ) {
+          setSelectedSheetTab(result.palletTabTitle);
+        }
+        lastSyncedDigestRef.current = computeDataDigest();
+        setPendingSyncCount(0);
+        appendSyncLog(
+          mode,
+          `Tersinkron ${result.palletRowsCount} baris Pallet ke tab "${result.palletTabTitle}"${
+            includeSuratJalanTab ? ` · ${result.suratJalanRowsCount} SJ Pallet` : ''
+          }${
+            includeManualSjTab ? ` · ${result.manualSuratJalanRowsCount ?? 0} Baris SJ Manual` : ''
+          }.`,
+          'success'
+        );
+        return result;
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : 'Gagal menyinkronkan ke Google Sheets.';
+        setSheetsSyncError(msg);
+        if (
+          syncMode === 'oauth' &&
+          (msg.startsWith('AUTH_REQUIRED') || msg.startsWith('TOKEN_EXPIRED'))
+        ) {
+          setNeedsGoogleAuth(true);
+        }
+        appendSyncLog(mode, msg, 'error');
+        throw err;
+      } finally {
+        setIsSyncingSheets(false);
+      }
+    },
+    [
+      syncMode,
+      appsScriptUrl,
+      appsScriptSecret,
+      spreadsheetInput,
+      selectedSheetTab,
+      records,
+      suratJalanHistory,
+      masterItems,
+      masterWarehouses,
+      includeSuratJalanTab,
+      includeManualSjTab,
+      manualSjSpreadsheetInput,
+      includeRekapTab,
+      computeDataDigest,
+      appendSyncLog
+    ]
+  );
+
+  const handleGoogleSignIn = async () => {
+    setIsGoogleLoggingIn(true);
+    setSheetsSyncError(null);
+    try {
+      const { user } = await signInWithGoogleSheets();
+      setGoogleUser(user);
+      setNeedsGoogleAuth(false);
+    } catch (err: unknown) {
+      setSheetsSyncError(
+        err instanceof Error ? err.message : 'Gagal masuk dengan akun Google.'
+      );
+    } finally {
+      setIsGoogleLoggingIn(false);
+    }
+  };
+
+  const handleGoogleSignOut = async () => {
+    await signOutGoogleSheets();
+    setGoogleUser(null);
+    setNeedsGoogleAuth(true);
+    if (syncMode === 'oauth') {
+      setAutoSyncEnabled(false);
+    }
+  };
+
+  const handleEnableAutoSync = async () => {
+    const res = await executeSheetsSync('Otomatis');
+    setAutoSyncEnabled(true);
+    if (syncMode === 'apps_script' && isValidAppsScriptUrl(appsScriptUrl)) {
+      await persistBridgeConfigToCloud({
+        autoSync24x7Enabled: true,
+        palletTabTitle: res.palletTabTitle || selectedSheetTab,
+        lastSyncedAt: res.syncedAt
+      });
+    }
+  };
+
+  const handleDisableAutoSync = async () => {
+    setAutoSyncEnabled(false);
+    if (syncMode === 'apps_script' && isBridgeSavedInCloud) {
+      await persistBridgeConfigToCloud({ autoSync24x7Enabled: false }).catch(() => {});
+    }
+  };
+
+  const handleImportFromGoogleSheet = async (extraRecords: PalletRecord[]) => {
+    if (!extraRecords || extraRecords.length === 0) return;
+    setRecords((prev) => {
+      const existingIds = new Set(prev.map((r) => r.id));
+      const newItems = extraRecords.filter((r) => !existingIds.has(r.id));
+      return [...newItems, ...prev];
+    });
+    await savePalletRecordsBatch(extraRecords);
+    setLocalMutationVersion((v) => v + 1);
+  };
+
+  // Auto-sync debounced effect:
+  // - Cara B (apps_script): runs on ANY operator's device whenever this device performs a mutation (24/7, no Google login needed!)
+  // - Cara A (oauth): runs on the signed-in owner's browser whenever any data digest changes
+  useEffect(() => {
+    if (!autoSyncEnabled) return;
+
+    if (syncMode === 'apps_script') {
+      if (!isValidAppsScriptUrl(appsScriptUrl)) return;
+      if (
+        localMutationVersion === 0 ||
+        localMutationVersion === lastSyncedLocalVersionRef.current
+      ) {
+        return;
+      }
+
+      const timer = window.setTimeout(() => {
+        lastSyncedLocalVersionRef.current = localMutationVersion;
+        executeSheetsSync('Otomatis').catch(() => {});
+      }, 1200);
+
+      return () => window.clearTimeout(timer);
+    }
+
+    const digest = computeDataDigest();
+    if (digest === lastSyncedDigestRef.current) return;
+
+    if (needsGoogleAuth || !getGoogleSheetsAccessToken()) {
+      setPendingSyncCount((c) => c + 1);
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      executeSheetsSync('Otomatis').catch(() => {});
+    }, 1500);
+
+    return () => window.clearTimeout(timer);
+  }, [
+    autoSyncEnabled,
+    syncMode,
+    appsScriptUrl,
+    localMutationVersion,
+    computeDataDigest,
+    needsGoogleAuth,
+    executeSheetsSync
+  ]);
 
   // Master Items Handlers
   const handleAddMasterItem = (newItem: Omit<MasterItem, 'id'>) => {
@@ -775,6 +1184,7 @@ export default function App() {
       );
       await saveSuratJalanRecord(newSurat);
     }
+    setLocalMutationVersion((v) => v + 1);
   };
 
   const handleOpenBinDetail = (binCode: string) => {
@@ -829,10 +1239,19 @@ export default function App() {
         .filter(Boolean)
         .join(', ');
       const rowTimestamp = new Date(nowMs + idx * 1000).toISOString();
+      const currentWhForBin = resolveWarehouseForBin(
+        lokasiBin,
+        masterWarehouses,
+        activeWarehouse
+      );
+      const canonicalWarehouse = mapGroupToCanonicalWarehouse(
+        currentWhForBin?.locationGroup || activeWarehouse?.locationGroup
+      );
 
       return {
         id: `plt-${nowMs}-${idx}-${Math.random().toString(36).substring(2, 5)}`,
         nomorPallet: row.nomorPallet.trim().toUpperCase(),
+        statusQc: row.statusQc || 'OK',
         barcodeNumber: generatePalletBarcode('PLT'),
         batchId,
         itemIndex: idx + 1,
@@ -847,6 +1266,7 @@ export default function App() {
         batchAkhir: boxAkhirVal,
         batches: allBatches,
         lokasiBin: lokasiBin.trim().toUpperCase(),
+        lokasiGudang: canonicalWarehouse,
         keterangan: row.keterangan?.trim() || '',
         submittedAt: rowTimestamp
       };
@@ -872,6 +1292,7 @@ export default function App() {
     savePalletRecordsBatch(newPalletRecords).catch((err) =>
       console.error('Failed to sync new pallet records to cloud:', err)
     );
+    setLocalMutationVersion((v) => v + 1);
   };
 
   const handleUpdateRecord = async (updatedRecord: PalletRecord) => {
@@ -898,6 +1319,7 @@ export default function App() {
       };
     });
     await updatePalletRecord(stampedRecord);
+    setLocalMutationVersion((v) => v + 1);
   };
 
   const handleReorderPallets = async (orderedPallets: PalletRecord[]) => {
@@ -921,6 +1343,7 @@ export default function App() {
     );
 
     await updatePalletsBinOrder(updates);
+    setLocalMutationVersion((v) => v + 1);
   };
 
   const handleDeleteRecord = (id: string) => {
@@ -928,6 +1351,7 @@ export default function App() {
     deletePalletRecord(id).catch((err) =>
       console.error('Failed to delete pallet record from cloud:', err)
     );
+    setLocalMutationVersion((v) => v + 1);
   };
 
   const handleClearAllRecords = () => {
@@ -940,6 +1364,7 @@ export default function App() {
     clearAllPalletRecords().catch((err) =>
       console.error('Failed to clear cloud pallet records:', err)
     );
+    setLocalMutationVersion((v) => v + 1);
   };
 
   const handleProcessOutbound = async (
@@ -967,6 +1392,7 @@ export default function App() {
 
     try {
       await updatePalletsOutbound(palletIds, destination, petugas);
+      setLocalMutationVersion((v) => v + 1);
     } catch (err) {
       console.error('Failed to update outbound in Firestore:', err);
     }
@@ -993,6 +1419,7 @@ export default function App() {
 
     try {
       await restorePalletsToBin(palletIds);
+      setLocalMutationVersion((v) => v + 1);
     } catch (err) {
       console.error('Failed to restore outbound pallets in Firestore:', err);
     }
@@ -1042,6 +1469,9 @@ export default function App() {
         });
         savePalletRecordsBatch(newRecords).catch(() => {});
       }
+    }
+    if (newRecords && newRecords.length > 0) {
+      setLocalMutationVersion((v) => v + 1);
     }
   };
 
@@ -1241,6 +1671,10 @@ export default function App() {
     surat_jalan: {
       title: 'Surat Jalan / Delivery Note',
       subtitle: 'Penerbitan dokumen Form F/SCM/01.08 muatan armada pengiriman'
+    },
+    google_sheets: {
+      title: 'Integrasi Google Sheets — Data GBJ (new)',
+      subtitle: 'Sinkronisasi langsung (otomatis & manual) serta audit selisih antara sistem dan spreadsheet'
     }
   };
 
@@ -1541,6 +1975,58 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => {
+                  setActiveTab('google_sheets');
+                  setIsMobileMenuOpen(false);
+                }}
+                className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold transition-all ${
+                  activeTab === 'google_sheets'
+                    ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/20'
+                    : 'text-slate-700 dark:text-slate-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 hover:text-emerald-700 dark:hover:text-emerald-300'
+                }`}
+                title='Integrasi langsung ke Google Spreadsheet "Data GBJ (new)"'
+              >
+                <div className="flex items-center gap-2.5">
+                  <FileSpreadsheet
+                    className={`w-4 h-4 ${
+                      activeTab === 'google_sheets'
+                        ? 'text-white'
+                        : 'text-emerald-600 dark:text-emerald-400'
+                    }`}
+                  />
+                  <span>Google Sheets Sync</span>
+                </div>
+                <span
+                  className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                    activeTab === 'google_sheets'
+                      ? 'bg-white/20 text-white'
+                      : autoSyncEnabled &&
+                        ((syncMode === 'apps_script' && isValidAppsScriptUrl(appsScriptUrl)) ||
+                          (syncMode === 'oauth' && !needsGoogleAuth))
+                      ? 'bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300'
+                      : pendingSyncCount > 0
+                      ? 'bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300'
+                      : 'bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400'
+                  }`}
+                >
+                  {syncMode === 'apps_script'
+                    ? autoSyncEnabled && isValidAppsScriptUrl(appsScriptUrl)
+                      ? '24/7'
+                      : isValidAppsScriptUrl(appsScriptUrl)
+                      ? 'Siap'
+                      : 'Setup'
+                    : autoSyncEnabled && !needsGoogleAuth
+                    ? 'Auto'
+                    : pendingSyncCount > 0
+                    ? `${pendingSyncCount}`
+                    : needsGoogleAuth
+                    ? 'Off'
+                    : 'Siap'}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
                   setIsBackupModalOpen(true);
                   setIsMobileMenuOpen(false);
                 }}
@@ -1742,6 +2228,41 @@ export default function App() {
 
         {/* Main Workspace Body */}
         <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto w-full">
+          {records.length > 0 &&
+            !lastSyncResult &&
+            !(syncMode === 'apps_script' && autoSyncEnabled && isValidAppsScriptUrl(appsScriptUrl) && cloudBridgeLastSyncedAt) &&
+            activeTab !== 'google_sheets' &&
+            !isSheetsBannerDismissed && (
+              <div className="no-print mb-5 px-4 py-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/70 flex flex-wrap items-center justify-between gap-3 text-xs">
+                <div className="flex items-center gap-2.5 text-emerald-900 dark:text-emerald-200">
+                  <FileSpreadsheet className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                  <span>
+                    <strong>{records.length} Data Pallet</strong> &amp;{' '}
+                    <strong>{suratJalanHistory.length} Surat Jalan</strong> tersedia. Sinkronkan ke
+                    Google Sheets <strong>&ldquo;Data GBJ (new)&rdquo;</strong> agar data
+                    otomatis terisi.
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('google_sheets')}
+                    className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs transition-colors cursor-pointer"
+                  >
+                    Buka Google Sheets Sync &rarr;
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsSheetsBannerDismissed(true)}
+                    className="px-2 py-1.5 rounded-lg text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 font-semibold text-xs cursor-pointer"
+                    aria-label="Tutup pemberitahuan"
+                  >
+                    Tutup
+                  </button>
+                </div>
+              </div>
+            )}
+
           {activeTab === 'input' && (
             <div className="space-y-6">
               <PalletInputForm
@@ -1766,6 +2287,8 @@ export default function App() {
             <PalletHistoryTable
               records={records}
               masterItems={masterItems}
+              masterWarehouses={masterWarehouses}
+              suratJalanHistory={suratJalanHistory}
               onUpdateRecord={handleUpdateRecord}
               onReorderPallets={handleReorderPallets}
               onDeleteRecord={handleDeleteRecord}
@@ -1811,6 +2334,68 @@ export default function App() {
               masterTariffs={masterTariffs}
               suratJalanHistory={suratJalanHistory}
               onSaveSuratJalan={handleSaveSuratJalan}
+            />
+          )}
+
+          {activeTab === 'google_sheets' && (
+            <GoogleSheetsSyncView
+              records={records}
+              suratJalanHistory={suratJalanHistory}
+              masterItems={masterItems}
+              masterWarehouses={masterWarehouses}
+              syncMode={syncMode}
+              onChangeSyncMode={(m) => setSyncMode(m)}
+              appsScriptUrl={appsScriptUrl}
+              onChangeAppsScriptUrl={setAppsScriptUrl}
+              appsScriptSecret={appsScriptSecret}
+              onChangeAppsScriptSecret={setAppsScriptSecret}
+              isBridgeSavedInCloud={isBridgeSavedInCloud}
+              onSaveBridgeSettings={async (opts) => {
+                await persistBridgeConfigToCloud({
+                  syncMode: 'apps_script',
+                  autoSync24x7Enabled: opts?.autoSync24x7 ?? autoSyncEnabled
+                });
+              }}
+              googleUser={googleUser}
+              needsAuth={needsGoogleAuth}
+              isLoggingIn={isGoogleLoggingIn}
+              onGoogleSignIn={handleGoogleSignIn}
+              onGoogleSignOut={handleGoogleSignOut}
+              spreadsheetInput={spreadsheetInput}
+              onChangeSpreadsheetInput={setSpreadsheetInput}
+              selectedSheetTab={selectedSheetTab}
+              onChangeSelectedSheetTab={setSelectedSheetTab}
+              includeSuratJalanTab={includeSuratJalanTab}
+              onChangeIncludeSuratJalanTab={setIncludeSuratJalanTab}
+              includeManualSjTab={includeManualSjTab}
+              onChangeIncludeManualSjTab={setIncludeManualSjTab}
+              manualSjSpreadsheetInput={manualSjSpreadsheetInput}
+              onChangeManualSjSpreadsheetInput={setManualSjSpreadsheetInput}
+              includeRekapTab={includeRekapTab}
+              onChangeIncludeRekapTab={setIncludeRekapTab}
+              autoSyncEnabled={autoSyncEnabled}
+              onEnableAutoSync={handleEnableAutoSync}
+              onDisableAutoSync={handleDisableAutoSync}
+              isSyncing={isSyncingSheets}
+              lastSyncResult={lastSyncResult}
+              syncError={sheetsSyncError}
+              pendingSyncCount={pendingSyncCount}
+              activityLogs={syncActivityLogs}
+              onExecuteManualSync={async (alsoEnableAutoSync?: boolean) => {
+                const res = await executeSheetsSync('Manual');
+                if (alsoEnableAutoSync) {
+                  setAutoSyncEnabled(true);
+                }
+                if (syncMode === 'apps_script' && isValidAppsScriptUrl(appsScriptUrl)) {
+                  await persistBridgeConfigToCloud({
+                    syncMode: 'apps_script',
+                    palletTabTitle: res.palletTabTitle || selectedSheetTab,
+                    autoSync24x7Enabled: alsoEnableAutoSync ? true : autoSyncEnabled,
+                    lastSyncedAt: res.syncedAt
+                  }).catch(() => {});
+                }
+              }}
+              onImportFromSheet={handleImportFromGoogleSheet}
             />
           )}
         </main>
@@ -1868,6 +2453,8 @@ export default function App() {
           return wh ? `${wh.namaGudang} · ${wh.locationGroup}` : activeWarehouse.namaGudang;
         })()}
         records={records}
+        masterWarehouses={masterWarehouses}
+        suratJalanHistory={suratJalanHistory}
         onReorderPallets={handleReorderPallets}
         onProcessOutbound={handleProcessOutbound}
         onRestoreOutbound={handleRestoreOutbound}

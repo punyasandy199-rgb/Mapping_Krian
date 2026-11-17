@@ -1,12 +1,24 @@
 import React, { useState, useMemo } from 'react';
 import {
   PalletRecord,
+  PalletQcStatus,
+  PALLET_QC_STATUSES,
   PalletBatchEntry,
+  WarehouseTransferEntry,
   MasterItem,
+  MasterWarehouse,
+  SuratJalanRecord,
+  DEFAULT_MASTER_WAREHOUSES,
+  CANONICAL_WAREHOUSE_LOCATIONS,
   COMMON_UNITS,
   GUDANG5_QUICK_BINS,
   GUDANG5_SLOTS_A,
-  GUDANG5_SLOTS_B
+  GUDANG5_SLOTS_B,
+  resolveWarehouseForBin,
+  resolvePalletWarehouseLocation,
+  computePalletStockStatus,
+  resolvePalletQcStatus,
+  deriveAsalPacking
 } from '../types/warehouse';
 import { exportPalletsToCsv } from '../utils/exporter';
 import { sortBinRecordsByLoadingOrder } from '../utils/binSorting';
@@ -48,12 +60,16 @@ import {
   CheckCircle2,
   GripVertical,
   ArrowUp,
-  ArrowDown
+  ArrowDown,
+  ArrowRightLeft,
+  Warehouse
 } from 'lucide-react';
 
 interface PalletHistoryTableProps {
   records: PalletRecord[];
   masterItems?: MasterItem[];
+  masterWarehouses?: MasterWarehouse[];
+  suratJalanHistory?: SuratJalanRecord[];
   onUpdateRecord?: (updated: PalletRecord) => Promise<void> | void;
   onReorderPallets?: (orderedRecords: PalletRecord[]) => Promise<void> | void;
   onDeleteRecord: (id: string) => void;
@@ -63,9 +79,20 @@ interface PalletHistoryTableProps {
   onRestoreOutbound?: (palletIds: string[]) => Promise<void> | void;
 }
 
+function toDatetimeLocalValue(iso?: string): string {
+  const d = iso ? new Date(iso) : new Date();
+  if (isNaN(d.getTime())) return '';
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(
+    d.getHours()
+  )}:${pad(d.getMinutes())}`;
+}
+
 export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
   records,
   masterItems = [],
+  masterWarehouses = DEFAULT_MASTER_WAREHOUSES,
+  suratJalanHistory = [],
   onUpdateRecord,
   onReorderPallets,
   onDeleteRecord,
@@ -76,6 +103,10 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedBinFilter, setSelectedBinFilter] = useState<string>('ALL');
+  const [selectedWarehouseFilter, setSelectedWarehouseFilter] = useState<string>('ALL');
+  const [selectedStockFilter, setSelectedStockFilter] = useState<'ALL' | 'Ada' | 'Habis'>('ALL');
+  const [selectedQcStatusFilter, setSelectedQcStatusFilter] = useState<'ALL' | PalletQcStatus>('ALL');
+  const [selectedPackingFilter, setSelectedPackingFilter] = useState<'ALL' | 'Packing 1' | 'Packing 2'>('ALL');
   const [displayMode, setDisplayMode] = useState<'per_bin' | 'flat'>('per_bin');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [activePrintRecord, setActivePrintRecord] = useState<PalletRecord | null>(null);
@@ -91,9 +122,30 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
   // Edit Pallet Modal state
   const [editingRecord, setEditingRecord] = useState<PalletRecord | null>(null);
   const [editBatches, setEditBatches] = useState<PalletBatchEntry[]>([]);
+  const [editOperHistory, setEditOperHistory] = useState<WarehouseTransferEntry[]>([]);
   const [editError, setEditError] = useState<string | null>(null);
   const [isSavingEdit, setIsSavingEdit] = useState(false);
   const [editSuccessMsg, setEditSuccessMsg] = useState<string | null>(null);
+
+  // Quick Oper Gudang Modal state
+  const [transferRecord, setTransferRecord] = useState<PalletRecord | null>(null);
+  const [transferGudangAsal, setTransferGudangAsal] = useState<string>('SJA 3 (SJA Sukodono)');
+  const [transferDari, setTransferDari] = useState<string>('SJA 3 (SJA Sukodono)');
+  const [transferKe, setTransferKe] = useState<string>('Gd 137');
+  const [transferTanggal, setTransferTanggal] = useState<string>('');
+  const [transferBinBaru, setTransferBinBaru] = useState<string>('');
+  const [transferPetugas, setTransferPetugas] = useState<string>('');
+  const [transferCatatan, setTransferCatatan] = useState<string>('');
+  const [isSavingTransfer, setIsSavingTransfer] = useState(false);
+
+  const findLinkedSj = (item: PalletRecord) =>
+    suratJalanHistory.find(
+      (sj) =>
+        sj.id === item.suratJalanId ||
+        sj.palletIds?.includes(item.id) ||
+        (item.noSuratJalan &&
+          sj.noSuratJalan?.toUpperCase() === item.noSuratJalan.toUpperCase())
+    ) || null;
 
   const toggleExpandBin = (binCode: string) => {
     setExpandedBinCodes((prev) => {
@@ -129,7 +181,13 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
   // Open Edit Modal
   const handleStartEditRecord = (record: PalletRecord) => {
     const existingBatches = getPalletBatches(record);
-    setEditingRecord({ ...record });
+    const resolvedWh = resolvePalletWarehouseLocation(record, masterWarehouses);
+    setEditingRecord({
+      ...record,
+      statusQc: resolvePalletQcStatus(record),
+      lokasiGudang: record.lokasiGudang || resolvedWh,
+      gudangAsal: record.gudangAsal || record.operHistory?.[0]?.dariGudang || ''
+    });
     setEditBatches(
       existingBatches.length > 0
         ? existingBatches.map((b) => ({
@@ -140,7 +198,90 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
           }))
         : [{ noBatch: record.noBatch || '', boxAwal: record.boxAwal || '', boxAkhir: record.boxAkhir || '' }]
     );
+    setEditOperHistory(
+      (record.operHistory || []).map((op) => ({
+        dariGudang: op.dariGudang || '',
+        keGudang: op.keGudang || '',
+        tanggalOper: op.tanggalOper || '',
+        ...(op.binBaru ? { binBaru: op.binBaru } : {}),
+        ...(op.petugas ? { petugas: op.petugas } : {}),
+        ...(op.catatan ? { catatan: op.catatan } : {})
+      }))
+    );
     setEditError(null);
+  };
+
+  // Open Quick Oper Gudang Modal
+  const handleOpenTransferModal = (record: PalletRecord) => {
+    const currentWh = resolvePalletWarehouseLocation(record, masterWarehouses);
+    const existingCount = (record.operHistory || []).length;
+    const defaultOrigin =
+      record.gudangAsal || record.operHistory?.[0]?.dariGudang || 'SJA 3 (SJA Sukodono)';
+
+    // Smart default destination:
+    // Oper 1: SJA 3 -> Gd 137 (or Gd Krian)
+    // Oper 2: Gd 137 / Gd Krian -> SJA 3 (SJA Sukodono)
+    let defaultDest = 'SJA 3 (SJA Sukodono)';
+    if (currentWh === 'SJA 3 (SJA Sukodono)') {
+      defaultDest = 'Gd 137';
+    } else if (existingCount >= 1) {
+      defaultDest = 'SJA 3 (SJA Sukodono)';
+    }
+
+    setTransferRecord(record);
+    setTransferGudangAsal(defaultOrigin);
+    setTransferDari(currentWh);
+    setTransferKe(defaultDest);
+    setTransferTanggal(toDatetimeLocalValue());
+    setTransferBinBaru(record.lokasiBin || '');
+    setTransferPetugas('');
+    setTransferCatatan('');
+  };
+
+  const handleConfirmTransfer = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!transferRecord || !onUpdateRecord) return;
+    const isoDate = transferTanggal
+      ? new Date(transferTanggal).toISOString()
+      : new Date().toISOString();
+    const binClean = (transferBinBaru || transferRecord.lokasiBin || '').trim().toUpperCase();
+    const existingHistory = transferRecord.operHistory || [];
+    const newEntry: WarehouseTransferEntry = {
+      dariGudang: transferDari,
+      keGudang: transferKe,
+      tanggalOper: isoDate,
+      ...(binClean ? { binBaru: binClean } : {}),
+      ...(transferPetugas.trim() ? { petugas: transferPetugas.trim() } : {}),
+      ...(transferCatatan.trim() ? { catatan: transferCatatan.trim() } : {})
+    };
+    const nextHistory = [...existingHistory, newEntry];
+    const operStepNum = nextHistory.length;
+    const binChanged = binClean !== (transferRecord.lokasiBin || '').toUpperCase();
+
+    const updated: PalletRecord = {
+      ...transferRecord,
+      lokasiGudang: transferKe,
+      gudangAsal: transferGudangAsal || transferRecord.gudangAsal || transferDari,
+      lokasiBin: binClean || transferRecord.lokasiBin,
+      operHistory: nextHistory,
+      ...(binChanged ? { binOrder: undefined } : {}),
+      updatedAt: new Date().toISOString(),
+      lastUpdateAction: `Oper Gudang ke-${operStepNum}: ${transferDari} → ${transferKe}`
+    };
+
+    try {
+      setIsSavingTransfer(true);
+      await onUpdateRecord(updated);
+      setTransferRecord(null);
+      setEditSuccessMsg(
+        `Oper Gudang ke-${operStepNum} untuk Pallet ${updated.nomorPallet} (${transferDari} → ${transferKe}) berhasil dicatat!`
+      );
+      setTimeout(() => setEditSuccessMsg(null), 4500);
+    } catch (err) {
+      console.error('Gagal menyimpan oper gudang:', err);
+    } finally {
+      setIsSavingTransfer(false);
+    }
   };
 
   const handleSaveEditRecord = async (e: React.FormEvent) => {
@@ -204,10 +345,34 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
     const binChanged =
       originalRecord && originalRecord.lokasiBin.toUpperCase() !== binClean;
 
+    const cleanedOperHistory: WarehouseTransferEntry[] = editOperHistory
+      .filter((op) => (op.dariGudang || '').trim() || (op.keGudang || '').trim())
+      .map((op) => ({
+        dariGudang: (op.dariGudang || '').trim() || 'SJA 3 (SJA Sukodono)',
+        keGudang: (op.keGudang || '').trim() || 'Gd Krian',
+        tanggalOper: op.tanggalOper || new Date().toISOString(),
+        ...(op.binBaru?.trim() ? { binBaru: op.binBaru.trim().toUpperCase() } : {}),
+        ...(op.petugas?.trim() ? { petugas: op.petugas.trim() } : {}),
+        ...(op.catatan?.trim() ? { catatan: op.catatan.trim() } : {})
+      }));
+
+    const resolvedGudang =
+      (editingRecord.lokasiGudang || '').trim() ||
+      resolvePalletWarehouseLocation(
+        { lokasiBin: binClean, lokasiGudang: '' },
+        masterWarehouses
+      );
+
     const updated: PalletRecord = {
       ...editingRecord,
       nomorPallet: noPalletClean,
+      statusQc: resolvePalletQcStatus(editingRecord),
       lokasiBin: binClean,
+      lokasiGudang: resolvedGudang,
+      ...(editingRecord.gudangAsal?.trim()
+        ? { gudangAsal: editingRecord.gudangAsal.trim() }
+        : { gudangAsal: '' }),
+      operHistory: cleanedOperHistory,
       kodeItem: kodeClean,
       namaBarang: namaClean,
       qtyPallet: qtyNum,
@@ -226,7 +391,9 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
       setIsSavingEdit(true);
       await onUpdateRecord(updated);
       setEditingRecord(null);
-      setEditSuccessMsg(`Data Pallet ${updated.nomorPallet} (Bin ${updated.lokasiBin}) berhasil diperbarui!`);
+      setEditSuccessMsg(
+        `Data Pallet ${updated.nomorPallet} (${updated.lokasiGudang} · Bin ${updated.lokasiBin}) berhasil diperbarui!`
+      );
       setTimeout(() => setEditSuccessMsg(null), 4000);
     } catch (err) {
       console.error('Gagal menyimpan perubahan pallet:', err);
@@ -240,13 +407,23 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
   const filteredRecords = useMemo(() => {
     return records.filter((item) => {
       const q = searchTerm.toLowerCase();
+      const whLoc = resolvePalletWarehouseLocation(item, masterWarehouses);
+      const linkedSj = findLinkedSj(item);
+      const stockStatus = computePalletStockStatus(item, linkedSj);
+      const qcStatus = resolvePalletQcStatus(item);
+      const packingLabel = deriveAsalPacking(item.noBatch);
+
       const matchSearch =
         item.namaBarang.toLowerCase().includes(q) ||
         (item.kodeItem && item.kodeItem.toLowerCase().includes(q)) ||
         (item.nomorPallet && item.nomorPallet.toLowerCase().includes(q)) ||
         (item.noBatch && item.noBatch.toLowerCase().includes(q)) ||
+        qcStatus.toLowerCase().includes(q) ||
+        packingLabel.toLowerCase().includes(q) ||
         item.barcodeNumber.toLowerCase().includes(q) ||
         item.lokasiBin.toLowerCase().includes(q) ||
+        whLoc.toLowerCase().includes(q) ||
+        (item.gudangAsal && item.gudangAsal.toLowerCase().includes(q)) ||
         (item.boxAwal && item.boxAwal.toLowerCase().includes(q)) ||
         (item.boxAkhir && item.boxAkhir.toLowerCase().includes(q)) ||
         (item.batchAwal && item.batchAwal.toLowerCase().includes(q)) ||
@@ -256,7 +433,8 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
             (b) =>
               b.noBatch.toLowerCase().includes(q) ||
               b.boxAwal.toLowerCase().includes(q) ||
-              b.boxAkhir.toLowerCase().includes(q)
+              b.boxAkhir.toLowerCase().includes(q) ||
+              deriveAsalPacking(b.noBatch).toLowerCase().includes(q)
           ));
 
       // Filter by Bin or Zone
@@ -271,9 +449,30 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
         matchBin = item.lokasiBin.toUpperCase() === selectedBinFilter.toUpperCase();
       }
 
-      return matchSearch && matchBin;
+      const matchWh =
+        selectedWarehouseFilter === 'ALL' || whLoc === selectedWarehouseFilter;
+      const matchStock =
+        selectedStockFilter === 'ALL' || stockStatus === selectedStockFilter;
+      const matchQc =
+        selectedQcStatusFilter === 'ALL' || qcStatus === selectedQcStatusFilter;
+      const matchPacking =
+        selectedPackingFilter === 'ALL' ||
+        packingLabel.includes(selectedPackingFilter) ||
+        (item.batches || []).some((b) => deriveAsalPacking(b.noBatch) === selectedPackingFilter);
+
+      return matchSearch && matchBin && matchWh && matchStock && matchQc && matchPacking;
     });
-  }, [records, searchTerm, selectedBinFilter]);
+  }, [
+    records,
+    searchTerm,
+    selectedBinFilter,
+    selectedWarehouseFilter,
+    selectedStockFilter,
+    selectedQcStatusFilter,
+    selectedPackingFilter,
+    masterWarehouses,
+    suratJalanHistory
+  ]);
 
   // Group filtered records by Bin (Auto-aggregating per Bin when new pallets are added)
   const groupedBins = useMemo(() => {
@@ -534,10 +733,10 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
                 onChange={(e) => setSelectedBinFilter(e.target.value)}
                 className="text-xs font-semibold bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-2.5 py-2 text-slate-800 dark:text-slate-200 focus:outline-none"
               >
-                <option value="ALL">Semua Bin (Gudang 5)</option>
+                <option value="ALL">Semua Bin</option>
                 <optgroup label="Kelompok Sisi">
-                  <option value="5A">Gudang 5 Sisi A (5A.*)</option>
-                  <option value="5B">Gudang 5 Sisi B (5B.*)</option>
+                  <option value="5A">Sisi A (5A.*)</option>
+                  <option value="5B">Sisi B (5B.*)</option>
                 </optgroup>
                 <optgroup label="Pilih Per Bin Saja">
                   {allAvailableBins.map((bin) => (
@@ -548,6 +747,68 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
                 </optgroup>
               </select>
             </div>
+
+            {/* Filter Lokasi Gudang */}
+            <select
+              value={selectedWarehouseFilter}
+              onChange={(e) => setSelectedWarehouseFilter(e.target.value)}
+              className="text-xs font-semibold bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-2.5 py-2 text-slate-800 dark:text-slate-200 focus:outline-none"
+              title="Filter berdasarkan Lokasi Gudang"
+            >
+              <option value="ALL">Semua Lokasi Gudang</option>
+              {CANONICAL_WAREHOUSE_LOCATIONS.map((whName) => (
+                <option key={whName} value={whName}>
+                  {whName}
+                </option>
+              ))}
+            </select>
+
+            {/* Filter Status Stok (Ada / Habis) */}
+            <select
+              value={selectedStockFilter}
+              onChange={(e) =>
+                setSelectedStockFilter(e.target.value as 'ALL' | 'Ada' | 'Habis')
+              }
+              className="text-xs font-semibold bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-2.5 py-2 text-slate-800 dark:text-slate-200 focus:outline-none"
+              title="Filter berdasarkan Status Stok Produk"
+            >
+              <option value="ALL">Semua Status Stok</option>
+              <option value="Ada">Stok: Ada</option>
+              <option value="Habis">Stok: Habis</option>
+            </select>
+
+            {/* Filter Status Pallet (OK / BO / HOLD) */}
+            <select
+              value={selectedQcStatusFilter}
+              onChange={(e) =>
+                setSelectedQcStatusFilter(e.target.value as 'ALL' | PalletQcStatus)
+              }
+              className="text-xs font-semibold bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-2.5 py-2 text-slate-800 dark:text-slate-200 focus:outline-none"
+              title="Filter berdasarkan Status Pallet (OK / BO / HOLD)"
+            >
+              <option value="ALL">Semua Status</option>
+              {PALLET_QC_STATUSES.map((st) => (
+                <option key={st} value={st}>
+                  Status: {st}
+                </option>
+              ))}
+            </select>
+
+            {/* Filter Asal Packing (Packing 1 / Packing 2) */}
+            <select
+              value={selectedPackingFilter}
+              onChange={(e) =>
+                setSelectedPackingFilter(
+                  e.target.value as 'ALL' | 'Packing 1' | 'Packing 2'
+                )
+              }
+              className="text-xs font-semibold bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-2.5 py-2 text-slate-800 dark:text-slate-200 focus:outline-none"
+              title="Filter berdasarkan Asal Packing (dari awalan No. Batch A/B)"
+            >
+              <option value="ALL">Semua Asal Packing</option>
+              <option value="Packing 1">Packing 1 (Batch A...)</option>
+              <option value="Packing 2">Packing 2 (Batch B...)</option>
+            </select>
 
             {/* Display Mode Switch: Per Bin vs Flat Table */}
             <div className="flex items-center p-0.5 bg-slate-100 dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700 text-xs">
@@ -726,13 +987,29 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
                         <MapPin className="w-5 h-5" />
                       </div>
                       <div>
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 flex-wrap">
                           <h3 className="text-lg font-black font-mono text-slate-900 dark:text-white">
                             LOKASI BIN: {binGroup.binCode}
                           </h3>
-                          <span className="text-[11px] font-bold font-mono px-2 py-0.5 rounded bg-blue-100 dark:bg-blue-950 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-900">
-                            Gudang 5
-                          </span>
+                          {(() => {
+                            const sampleItem = binGroup.items[0];
+                            const resolvedWh = sampleItem
+                              ? resolvePalletWarehouseLocation(sampleItem, masterWarehouses)
+                              : 'Gd Krian';
+                            const subWh = resolveWarehouseForBin(binGroup.binCode, masterWarehouses, null);
+                            return (
+                              <>
+                                <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-900">
+                                  {resolvedWh}
+                                </span>
+                                {subWh && (
+                                  <span className="text-[11px] font-bold font-mono px-2 py-0.5 rounded bg-blue-100 dark:bg-blue-950 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-900">
+                                    {subWh.namaGudang}
+                                  </span>
+                                )}
+                              </>
+                            );
+                          })()}
                         </div>
                         <div className="flex flex-wrap items-center gap-2.5 mt-1 text-xs text-slate-600 dark:text-slate-300 font-mono">
                           <span className="flex items-center gap-1 font-bold text-slate-900 dark:text-white">
@@ -862,7 +1139,8 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
                               </th>
                             )}
                             <th className="py-2.5 px-3 w-10 text-center">No</th>
-                            <th className="py-2.5 px-3">No Pallet</th>
+                            <th className="py-2.5 px-3">No Pallet &amp; Status Stok</th>
+                            <th className="py-2.5 px-3">Lokasi Gudang &amp; Oper</th>
                             <th className="py-2.5 px-3">Kode Item</th>
                             <th className="py-2.5 px-3">Nama Barang</th>
                             <th className="py-2.5 px-3 text-right">Qty</th>
@@ -992,22 +1270,83 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
                                   {rowIdx + 1}
                                 </td>
                                 <td className="py-2.5 px-3 font-bold text-slate-900 dark:text-slate-100">
-                                  <div className="flex items-center gap-1.5 flex-wrap">
-                                    <span
-                                      className={`px-2 py-0.5 rounded border text-xs ${
-                                        item.status === 'OUT'
-                                          ? 'bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-300 dark:border-slate-700 line-through'
-                                          : 'bg-amber-100 dark:bg-amber-950/60 text-amber-900 dark:text-amber-200 border-amber-300 dark:border-amber-900'
-                                      }`}
-                                    >
-                                      {item.nomorPallet || '-'}
-                                    </span>
-                                    {item.status === 'OUT' && (
-                                      <span className="text-[10px] font-sans font-bold px-1.5 py-0.2 rounded bg-amber-100 text-amber-800 border border-amber-300">
-                                        OUT: {item.tujuanPengambilan || 'Diambil'}
-                                      </span>
-                                    )}
-                                  </div>
+                                  {(() => {
+                                    const stockStatus = computePalletStockStatus(
+                                      item,
+                                      findLinkedSj(item)
+                                    );
+                                    const qcStatus = resolvePalletQcStatus(item);
+                                    const qcClass =
+                                      qcStatus === 'OK'
+                                        ? 'bg-emerald-600 text-white border-emerald-600'
+                                        : qcStatus === 'BO'
+                                        ? 'bg-amber-500 text-white border-amber-500'
+                                        : 'bg-rose-600 text-white border-rose-600';
+                                    return (
+                                      <div className="flex items-center gap-1.5 flex-wrap">
+                                        <span
+                                          className={`px-2 py-0.5 rounded border text-xs ${
+                                            item.status === 'OUT'
+                                              ? 'bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-300 dark:border-slate-700 line-through'
+                                              : 'bg-amber-100 dark:bg-amber-950/60 text-amber-900 dark:text-amber-200 border-amber-300 dark:border-amber-900'
+                                          }`}
+                                        >
+                                          {item.nomorPallet || '-'}
+                                        </span>
+                                        <span
+                                          className={`text-[10px] font-sans font-extrabold px-1.5 py-0.5 rounded border ${qcClass}`}
+                                          title={`Status Pallet: ${qcStatus}`}
+                                        >
+                                          {qcStatus}
+                                        </span>
+                                        <span
+                                          className={`text-[10px] font-sans font-bold px-1.5 py-0.5 rounded border ${
+                                            stockStatus === 'Ada'
+                                              ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border-emerald-300 dark:border-emerald-800'
+                                              : 'bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 border-rose-300 dark:border-rose-800'
+                                          }`}
+                                          title={
+                                            stockStatus === 'Ada'
+                                              ? 'Stok masih tersedia atau dioper ke SJA Sukodono'
+                                              : `Stok habis (dikirim ke ${item.tujuanPengambilan || 'tujuan lain'})`
+                                          }
+                                        >
+                                          Stok: {stockStatus}
+                                        </span>
+                                        {item.status === 'OUT' && (
+                                          <span className="text-[10px] font-sans font-bold px-1.5 py-0.2 rounded bg-amber-100 text-amber-800 border border-amber-300">
+                                            OUT: {item.tujuanPengambilan || 'Diambil'}
+                                          </span>
+                                        )}
+                                      </div>
+                                    );
+                                  })()}
+                                </td>
+                                <td className="py-2.5 px-3 font-sans text-[11px]">
+                                  {(() => {
+                                    const whLoc = resolvePalletWarehouseLocation(
+                                      item,
+                                      masterWarehouses
+                                    );
+                                    const ops = item.operHistory || [];
+                                    return (
+                                      <div className="space-y-1">
+                                        <span className="inline-block px-2 py-0.5 rounded font-bold bg-emerald-50 dark:bg-emerald-950/50 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                                          {whLoc}
+                                        </span>
+                                        {ops.length > 0 && (
+                                          <div className="space-y-0.5 text-[10px] text-slate-500 dark:text-slate-400">
+                                            {ops.slice(0, 2).map((op, opIdx) => (
+                                              <div key={opIdx} className="whitespace-nowrap">
+                                                <strong>Oper #{opIdx + 1}:</strong> {op.dariGudang} →{' '}
+                                                {op.keGudang}
+                                              </div>
+                                            ))}
+                                          </div>
+                                        )}
+                                      </div>
+                                    );
+                                  })()}
                                 </td>
                                 <td className="py-2.5 px-3 font-bold text-blue-600 dark:text-blue-400">
                                   {item.kodeItem || '-'}
@@ -1027,16 +1366,34 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
                                     if (batches.length > 1) {
                                       return (
                                         <div className="space-y-0.5">
-                                          {batches.map((b, bIdx) => (
-                                            <div key={bIdx} className="whitespace-nowrap">
-                                              <span className="text-[10px] text-slate-400 mr-1">#{bIdx + 1}</span>
-                                              {b.noBatch || '-'}
-                                            </div>
-                                          ))}
+                                          {batches.map((b, bIdx) => {
+                                            const pk = deriveAsalPacking(b.noBatch);
+                                            return (
+                                              <div key={bIdx} className="whitespace-nowrap flex items-center gap-1">
+                                                <span className="text-[10px] text-slate-400">#{bIdx + 1}</span>
+                                                <span>{b.noBatch || '-'}</span>
+                                                {pk !== '-' && (
+                                                  <span className="text-[9px] font-sans font-bold px-1 py-0.2 rounded bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+                                                    {pk}
+                                                  </span>
+                                                )}
+                                              </div>
+                                            );
+                                          })}
                                         </div>
                                       );
                                     }
-                                    return item.noBatch || '-';
+                                    const pk = deriveAsalPacking(item.noBatch);
+                                    return (
+                                      <div className="space-y-0.5">
+                                        <div>{item.noBatch || '-'}</div>
+                                        {pk !== '-' && (
+                                          <span className="inline-block text-[10px] font-sans font-bold px-1.5 py-0.2 rounded bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+                                            {pk}
+                                          </span>
+                                        )}
+                                      </div>
+                                    );
                                   })()}
                                 </td>
                                 <td className="py-2.5 px-3 text-[11px] text-slate-600 dark:text-slate-400">
@@ -1070,14 +1427,24 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
                                 <td className="py-2.5 px-3 text-center font-sans">
                                   <div className="flex items-center justify-center gap-1.5">
                                     {onUpdateRecord && (
-                                      <button
-                                        type="button"
-                                        onClick={() => handleStartEditRecord(item)}
-                                        className="p-1.5 text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/50 rounded-lg transition-colors cursor-pointer"
-                                        title="Edit data pallet (No. Box, Lokasi Bin, Batch)"
-                                      >
-                                        <Edit3 className="w-3.5 h-3.5" />
-                                      </button>
+                                      <>
+                                        <button
+                                          type="button"
+                                          onClick={() => handleOpenTransferModal(item)}
+                                          className="p-1.5 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/50 rounded-lg transition-colors cursor-pointer"
+                                          title="Catat Oper Gudang (SJA 3 ↔ Gd 137 / Gd Krian)"
+                                        >
+                                          <ArrowRightLeft className="w-3.5 h-3.5" />
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => handleStartEditRecord(item)}
+                                          className="p-1.5 text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/50 rounded-lg transition-colors cursor-pointer"
+                                          title="Edit data pallet (No. Box, Lokasi Bin, Lokasi Gudang, Batch, Oper Gudang)"
+                                        >
+                                          <Edit3 className="w-3.5 h-3.5" />
+                                        </button>
+                                      </>
                                     )}
                                     <button
                                       type="button"
@@ -1138,8 +1505,10 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
                       )}
                     </button>
                   </th>
-                  <th className="py-3 px-3">No Pallet</th>
+                  <th className="py-3 px-3">No Pallet &amp; Status Stok</th>
                   <th className="py-3 px-3">Lokasi Bin</th>
+                  <th className="py-3 px-3">Lokasi Gudang</th>
+                  <th className="py-3 px-3">History Oper Gudang</th>
                   <th className="py-3 px-3">Kode Item</th>
                   <th className="py-3 px-3">Nama Barang</th>
                   <th className="py-3 px-3">No Barcode</th>
@@ -1153,6 +1522,9 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-mono">
                 {filteredRecords.map((item) => {
                   const isSelected = selectedIds.has(item.id);
+                  const stockStatus = computePalletStockStatus(item, findLinkedSj(item));
+                  const whLoc = resolvePalletWarehouseLocation(item, masterWarehouses);
+                  const ops = item.operHistory || [];
 
                   return (
                     <tr
@@ -1175,27 +1547,76 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
                         </button>
                       </td>
                       <td className="py-3 px-3 font-bold text-slate-900 dark:text-slate-100">
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <span
-                            className={`px-2 py-0.5 rounded font-bold border text-xs ${
-                              item.status === 'OUT'
-                                ? 'bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-300 dark:border-slate-700 line-through'
-                                : 'bg-amber-100 dark:bg-amber-950/60 text-amber-900 dark:text-amber-200 border-amber-300 dark:border-amber-900'
-                            }`}
-                          >
-                            {item.nomorPallet || '-'}
-                          </span>
-                          {item.status === 'OUT' && (
-                            <span className="text-[10px] font-sans font-bold px-1.5 py-0.2 rounded bg-amber-100 text-amber-800 border border-amber-300">
-                              OUT: {item.tujuanPengambilan || 'Diambil'}
-                            </span>
-                          )}
-                        </div>
+                        {(() => {
+                          const qcStatus = resolvePalletQcStatus(item);
+                          const qcClass =
+                            qcStatus === 'OK'
+                              ? 'bg-emerald-600 text-white border-emerald-600'
+                              : qcStatus === 'BO'
+                              ? 'bg-amber-500 text-white border-amber-500'
+                              : 'bg-rose-600 text-white border-rose-600';
+                          return (
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span
+                                className={`px-2 py-0.5 rounded font-bold border text-xs ${
+                                  item.status === 'OUT'
+                                    ? 'bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-300 dark:border-slate-700 line-through'
+                                    : 'bg-amber-100 dark:bg-amber-950/60 text-amber-900 dark:text-amber-200 border-amber-300 dark:border-amber-900'
+                                }`}
+                              >
+                                {item.nomorPallet || '-'}
+                              </span>
+                              <span
+                                className={`text-[10px] font-sans font-extrabold px-1.5 py-0.5 rounded border ${qcClass}`}
+                                title={`Status Pallet: ${qcStatus}`}
+                              >
+                                {qcStatus}
+                              </span>
+                              <span
+                                className={`text-[10px] font-sans font-bold px-1.5 py-0.5 rounded border ${
+                                  stockStatus === 'Ada'
+                                    ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border-emerald-300 dark:border-emerald-800'
+                                    : 'bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 border-rose-300 dark:border-rose-800'
+                                }`}
+                              >
+                                Stok: {stockStatus}
+                              </span>
+                              {item.status === 'OUT' && (
+                                <span className="text-[10px] font-sans font-bold px-1.5 py-0.2 rounded bg-amber-100 text-amber-800 border border-amber-300">
+                                  OUT: {item.tujuanPengambilan || 'Diambil'}
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })()}
                       </td>
                       <td className="py-3 px-3">
                         <span className="text-xs font-bold text-blue-700 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/60 px-2 py-0.5 rounded border border-blue-200 dark:border-blue-900">
                           {item.lokasiBin}
                         </span>
+                      </td>
+                      <td className="py-3 px-3 font-sans">
+                        <span className="text-xs font-bold text-emerald-800 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/50 px-2 py-0.5 rounded border border-emerald-200 dark:border-emerald-800 whitespace-nowrap">
+                          {whLoc}
+                        </span>
+                      </td>
+                      <td className="py-3 px-3 font-sans text-[11px] text-slate-600 dark:text-slate-300">
+                        {ops.length === 0 ? (
+                          <span className="text-slate-400">
+                            {item.gudangAsal ? `Asal: ${item.gudangAsal}` : '-'}
+                          </span>
+                        ) : (
+                          <div className="space-y-0.5">
+                            {ops.slice(0, 2).map((op, opIdx) => (
+                              <div key={opIdx} className="whitespace-nowrap">
+                                <span className="font-bold text-indigo-700 dark:text-indigo-300">
+                                  Oper #{opIdx + 1}:
+                                </span>{' '}
+                                {op.dariGudang} → {op.keGudang}
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </td>
                       <td className="py-3 px-3 font-bold text-blue-600 dark:text-blue-400">
                         {item.kodeItem || '-'}
@@ -1216,16 +1637,34 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
                           if (batches.length > 1) {
                             return (
                               <div className="space-y-0.5">
-                                {batches.map((b, bIdx) => (
-                                  <div key={bIdx} className="whitespace-nowrap">
-                                    <span className="text-[10px] text-slate-400 mr-1">#{bIdx + 1}</span>
-                                    {b.noBatch || '-'}
-                                  </div>
-                                ))}
+                                {batches.map((b, bIdx) => {
+                                  const pk = deriveAsalPacking(b.noBatch);
+                                  return (
+                                    <div key={bIdx} className="whitespace-nowrap flex items-center gap-1">
+                                      <span className="text-[10px] text-slate-400">#{bIdx + 1}</span>
+                                      <span>{b.noBatch || '-'}</span>
+                                      {pk !== '-' && (
+                                        <span className="text-[9px] font-sans font-bold px-1 py-0.2 rounded bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+                                          {pk}
+                                        </span>
+                                      )}
+                                    </div>
+                                  );
+                                })}
                               </div>
                             );
                           }
-                          return item.noBatch || '-';
+                          const pk = deriveAsalPacking(item.noBatch);
+                          return (
+                            <div className="space-y-0.5">
+                              <div>{item.noBatch || '-'}</div>
+                              {pk !== '-' && (
+                                <span className="inline-block text-[10px] font-sans font-bold px-1.5 py-0.2 rounded bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+                                  {pk}
+                                </span>
+                              )}
+                            </div>
+                          );
                         })()}
                       </td>
                       <td className="py-3 px-3 text-[11px] text-slate-600 dark:text-slate-400">
@@ -1256,14 +1695,24 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
                       <td className="py-3 px-3 text-center font-sans">
                         <div className="flex items-center justify-center gap-1.5">
                           {onUpdateRecord && (
-                            <button
-                              type="button"
-                              onClick={() => handleStartEditRecord(item)}
-                              className="p-1.5 text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/50 rounded-lg transition-colors cursor-pointer"
-                              title="Edit data pallet (No. Box, Lokasi Bin, Batch)"
-                            >
-                              <Edit3 className="w-4 h-4" />
-                            </button>
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => handleOpenTransferModal(item)}
+                                className="p-1.5 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/50 rounded-lg transition-colors cursor-pointer"
+                                title="Catat Oper Gudang (SJA 3 ↔ Gd 137 / Gd Krian)"
+                              >
+                                <ArrowRightLeft className="w-4 h-4" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleStartEditRecord(item)}
+                                className="p-1.5 text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/50 rounded-lg transition-colors cursor-pointer"
+                                title="Edit data pallet (No. Box, Lokasi Bin, Lokasi Gudang, Batch)"
+                              >
+                                <Edit3 className="w-4 h-4" />
+                              </button>
+                            </>
                           )}
                           <button
                             type="button"
@@ -1337,7 +1786,7 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
               )}
 
               <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
-                <div className="sm:col-span-4">
+                <div className="sm:col-span-3">
                   <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
                     No Pallet *
                   </label>
@@ -1355,7 +1804,29 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
                   />
                 </div>
 
-                <div className="sm:col-span-4">
+                <div className="sm:col-span-3">
+                  <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
+                    Status Pallet *
+                  </label>
+                  <select
+                    value={resolvePalletQcStatus(editingRecord)}
+                    onChange={(e) =>
+                      setEditingRecord({
+                        ...editingRecord,
+                        statusQc: e.target.value as PalletQcStatus
+                      })
+                    }
+                    className="w-full font-bold bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-100"
+                  >
+                    {PALLET_QC_STATUSES.map((st) => (
+                      <option key={st} value={st}>
+                        {st}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="sm:col-span-3">
                   <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
                     Lokasi Bin *
                   </label>
@@ -1374,7 +1845,7 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
                   />
                 </div>
 
-                <div className="sm:col-span-4">
+                <div className="sm:col-span-3">
                   <label className="block font-semibold text-slate-600 dark:text-slate-400 mb-1">
                     Pilih Cepat Lokasi Bin
                   </label>
@@ -1410,6 +1881,51 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
                         </option>
                       ))}
                     </optgroup>
+                  </select>
+                </div>
+
+                <div className="sm:col-span-6">
+                  <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
+                    Lokasi Gudang *
+                  </label>
+                  <select
+                    value={editingRecord.lokasiGudang || 'Gd Krian'}
+                    onChange={(e) =>
+                      setEditingRecord({
+                        ...editingRecord,
+                        lokasiGudang: e.target.value
+                      })
+                    }
+                    className="w-full font-semibold bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-300 dark:border-emerald-800 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-100"
+                  >
+                    {CANONICAL_WAREHOUSE_LOCATIONS.map((wh) => (
+                      <option key={wh} value={wh}>
+                        {wh}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="sm:col-span-6">
+                  <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    Gudang Asal Stock IC (Opsional)
+                  </label>
+                  <select
+                    value={editingRecord.gudangAsal || ''}
+                    onChange={(e) =>
+                      setEditingRecord({
+                        ...editingRecord,
+                        gudangAsal: e.target.value
+                      })
+                    }
+                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-100"
+                  >
+                    <option value="">-- Belum Ditentukan --</option>
+                    {CANONICAL_WAREHOUSE_LOCATIONS.map((wh) => (
+                      <option key={wh} value={wh}>
+                        {wh}
+                      </option>
+                    ))}
                   </select>
                 </div>
 
@@ -1568,9 +2084,16 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
                         </div>
 
                         <div className="sm:col-span-3">
-                          <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-0.5">
-                            No. Batch *
-                          </label>
+                          <div className="flex items-center justify-between gap-1 mb-0.5">
+                            <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400">
+                              No. Batch *
+                            </label>
+                            {deriveAsalPacking(eb.noBatch) !== '-' && (
+                              <span className="text-[10px] font-bold text-indigo-700 dark:text-indigo-300">
+                                {deriveAsalPacking(eb.noBatch)}
+                              </span>
+                            )}
+                          </div>
                           <input
                             type="text"
                             required
@@ -1676,6 +2199,142 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
                 })()}
               </div>
 
+              {/* 2-Stage Oper Gudang History Editor */}
+              <div className="p-3.5 rounded-xl bg-indigo-50/50 dark:bg-indigo-950/20 border border-indigo-200 dark:border-indigo-900/60 space-y-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <span className="font-bold text-indigo-950 dark:text-indigo-200 flex items-center gap-1.5">
+                      <Warehouse className="w-3.5 h-3.5 text-indigo-600" />
+                      <span>
+                        Riwayat Oper Gudang ({editOperHistory.length}/2 Kali)
+                      </span>
+                    </span>
+                    <p className="text-[11px] text-slate-500">
+                      Alur IC: SJA 3 → Gd 137 / Gd Krian (Oper 1) → kembali ke SJA 3 (Oper 2)
+                    </p>
+                  </div>
+                  {editOperHistory.length < 2 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const isSecond = editOperHistory.length === 1;
+                        const prevKe = editOperHistory[0]?.keGudang || editingRecord.lokasiGudang || 'Gd 137';
+                        setEditOperHistory((prev) => [
+                          ...prev,
+                          {
+                            dariGudang: isSecond ? prevKe : editingRecord.gudangAsal || 'SJA 3 (SJA Sukodono)',
+                            keGudang: isSecond ? 'SJA 3 (SJA Sukodono)' : 'Gd 137',
+                            tanggalOper: new Date().toISOString(),
+                            binBaru: editingRecord.lokasiBin || ''
+                          }
+                        ]);
+                      }}
+                      className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-[11px] cursor-pointer"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Tambah Oper Gudang #{editOperHistory.length + 1}</span>
+                    </button>
+                  )}
+                </div>
+
+                {editOperHistory.length > 0 && (
+                  <div className="space-y-2">
+                    {editOperHistory.map((op, opIdx) => (
+                      <div
+                        key={opIdx}
+                        className="p-2.5 rounded-lg bg-white dark:bg-slate-900 border border-indigo-200 dark:border-indigo-800 grid grid-cols-1 sm:grid-cols-12 gap-2 items-end"
+                      >
+                        <div className="sm:col-span-2 self-center">
+                          <span className="px-2 py-0.5 rounded bg-indigo-600 text-white font-mono font-bold text-[11px]">
+                            Oper #{opIdx + 1}
+                          </span>
+                        </div>
+                        <div className="sm:col-span-3">
+                          <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">
+                            Dari Gudang
+                          </label>
+                          <select
+                            value={op.dariGudang}
+                            onChange={(e) =>
+                              setEditOperHistory((prev) =>
+                                prev.map((x, idx) =>
+                                  idx === opIdx ? { ...x, dariGudang: e.target.value } : x
+                                )
+                              )
+                            }
+                            className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-2 py-1.5 text-[11px]"
+                          >
+                            {CANONICAL_WAREHOUSE_LOCATIONS.map((wh) => (
+                              <option key={wh} value={wh}>
+                                {wh}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="sm:col-span-3">
+                          <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">
+                            Ke Gudang
+                          </label>
+                          <select
+                            value={op.keGudang}
+                            onChange={(e) =>
+                              setEditOperHistory((prev) =>
+                                prev.map((x, idx) =>
+                                  idx === opIdx ? { ...x, keGudang: e.target.value } : x
+                                )
+                              )
+                            }
+                            className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-2 py-1.5 text-[11px]"
+                          >
+                            {CANONICAL_WAREHOUSE_LOCATIONS.map((wh) => (
+                              <option key={wh} value={wh}>
+                                {wh}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="sm:col-span-3">
+                          <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">
+                            Tgl Oper Gudang
+                          </label>
+                          <input
+                            type="datetime-local"
+                            value={toDatetimeLocalValue(op.tanggalOper)}
+                            onChange={(e) =>
+                              setEditOperHistory((prev) =>
+                                prev.map((x, idx) =>
+                                  idx === opIdx
+                                    ? {
+                                        ...x,
+                                        tanggalOper: e.target.value
+                                          ? new Date(e.target.value).toISOString()
+                                          : new Date().toISOString()
+                                      }
+                                    : x
+                                )
+                              )
+                            }
+                            className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-2 py-1.5 text-[11px]"
+                          />
+                        </div>
+                        <div className="sm:col-span-1 flex justify-end">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setEditOperHistory((prev) => prev.filter((_, idx) => idx !== opIdx))
+                            }
+                            className="p-1.5 text-red-500 hover:bg-red-50 dark:hover:bg-red-950/40 rounded-lg cursor-pointer"
+                            title={`Hapus Oper #${opIdx + 1}`}
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
               <div>
                 <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
                   Keterangan / Catatan
@@ -1707,6 +2366,178 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
                 >
                   <Save className="w-4 h-4" />
                   <span>{isSavingEdit ? 'Menyimpan...' : 'Simpan Perubahan'}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Quick Oper Gudang Modal */}
+      {transferRecord && (
+        <div className="no-print fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-3 sm:p-5 overflow-y-auto">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl max-w-lg w-full border border-slate-200 dark:border-slate-800 shadow-2xl p-5 sm:p-6 my-auto space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-slate-800">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 rounded-xl">
+                  <ArrowRightLeft className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                    Catat Oper Gudang ke-{(transferRecord.operHistory?.length || 0) + 1}
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Pallet {transferRecord.nomorPallet || transferRecord.barcodeNumber} &middot;{' '}
+                    {transferRecord.namaBarang}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setTransferRecord(null)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {(transferRecord.operHistory || []).length > 0 && (
+              <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 space-y-1 text-xs">
+                <div className="font-bold text-slate-700 dark:text-slate-300">
+                  Riwayat Oper Sebelumnya:
+                </div>
+                {(transferRecord.operHistory || []).map((op, i) => (
+                  <div key={i} className="text-[11px] text-slate-600 dark:text-slate-300">
+                    <strong>Oper #{i + 1}:</strong> {op.dariGudang} → {op.keGudang} (
+                    {new Date(op.tanggalOper).toLocaleString('id-ID')})
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <form onSubmit={handleConfirmTransfer} className="space-y-3 text-xs">
+              <div>
+                <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
+                  Gudang Asal Stock IC
+                </label>
+                <select
+                  value={transferGudangAsal}
+                  onChange={(e) => setTransferGudangAsal(e.target.value)}
+                  className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-100 font-semibold"
+                >
+                  {CANONICAL_WAREHOUSE_LOCATIONS.map((wh) => (
+                    <option key={wh} value={wh}>
+                      {wh}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
+                    Dari Gudang Saat Ini *
+                  </label>
+                  <select
+                    value={transferDari}
+                    onChange={(e) => setTransferDari(e.target.value)}
+                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-100 font-semibold"
+                  >
+                    {CANONICAL_WAREHOUSE_LOCATIONS.map((wh) => (
+                      <option key={wh} value={wh}>
+                        {wh}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block font-bold text-indigo-700 dark:text-indigo-300 mb-1">
+                    Oper Ke Gudang Tujuan *
+                  </label>
+                  <select
+                    value={transferKe}
+                    onChange={(e) => setTransferKe(e.target.value)}
+                    className="w-full bg-indigo-50/70 dark:bg-indigo-950/30 border border-indigo-300 dark:border-indigo-800 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-100 font-bold"
+                  >
+                    {CANONICAL_WAREHOUSE_LOCATIONS.map((wh) => (
+                      <option key={wh} value={wh}>
+                        {wh}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    Tanggal &amp; Jam Oper
+                  </label>
+                  <input
+                    type="datetime-local"
+                    value={transferTanggal}
+                    onChange={(e) => setTransferTanggal(e.target.value)}
+                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-100"
+                  />
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    Lokasi Bin Baru (Opsional)
+                  </label>
+                  <input
+                    type="text"
+                    value={transferBinBaru}
+                    onChange={(e) => setTransferBinBaru(e.target.value.toUpperCase())}
+                    placeholder="Contoh: 5A.1"
+                    className="w-full font-mono font-bold bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-100"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    Petugas (Opsional)
+                  </label>
+                  <input
+                    type="text"
+                    value={transferPetugas}
+                    onChange={(e) => setTransferPetugas(e.target.value)}
+                    placeholder="Nama petugas lapangan"
+                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-100"
+                  />
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    Catatan (Opsional)
+                  </label>
+                  <input
+                    type="text"
+                    value={transferCatatan}
+                    onChange={(e) => setTransferCatatan(e.target.value)}
+                    placeholder="Keterangan perpindahan"
+                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-100"
+                  />
+                </div>
+              </div>
+
+              <div className="pt-3 border-t border-slate-200 dark:border-slate-800 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setTransferRecord(null)}
+                  disabled={isSavingTransfer}
+                  className="px-4 py-2 rounded-lg text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 font-semibold cursor-pointer"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingTransfer}
+                  className="flex items-center gap-1.5 px-5 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-bold shadow-sm transition-colors disabled:opacity-50 cursor-pointer"
+                >
+                  <ArrowRightLeft className="w-4 h-4" />
+                  <span>{isSavingTransfer ? 'Menyimpan...' : 'Simpan Oper Gudang'}</span>
                 </button>
               </div>
             </form>

@@ -1,10 +1,13 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import {
   PalletRowInput,
+  PalletQcStatus,
+  PALLET_QC_STATUSES,
   MasterItem,
   MasterWarehouse,
   COMMON_UNITS,
-  getWarehouseRackSlots
+  getWarehouseRackSlots,
+  deriveAsalPacking
 } from '../types/warehouse';
 import { calculateBatchBoxCount } from '../utils/batchCalculator';
 import { QrCodeRenderer } from './QrCodeRenderer';
@@ -37,6 +40,7 @@ interface PalletInputFormProps {
 const createEmptyRow = (index: number, inheritFrom?: PalletRowInput): PalletRowInput => ({
   id: `row-${Date.now()}-${index}-${Math.random().toString(36).substr(2, 4)}`,
   nomorPallet: '', // Kondisikan saat awal selalu kosong
+  statusQc: 'OK', // Default status pallet selalu 'OK'
   kodeItem: inheritFrom?.kodeItem || '',
   namaBarang: inheritFrom?.namaBarang || '', // saat penambahan baris mengikuti history 1 item diatasnya
   qtyPallet: '',
@@ -236,11 +240,12 @@ export const PalletInputForm: React.FC<PalletInputFormProps> = ({
     const newRows: PalletRowInput[] = sampleItems.map((item, idx) => ({
       id: `row-sample-${idx}-${Date.now()}`,
       nomorPallet: `PLT-0${idx + 1}`,
+      statusQc: 'OK',
       kodeItem: item.kodeItem,
       namaBarang: item.namaBarang,
       qtyPallet: 50,
       unit: item.satuan || 'Box',
-      noBatch: `B26010${idx + 1}`,
+      noBatch: idx === 0 ? 'A260101' : `B26010${idx + 1}`,
       boxAwal: `001`,
       boxAkhir: `050`,
       batchAwal: `001`,
@@ -598,7 +603,7 @@ export const PalletInputForm: React.FC<PalletInputFormProps> = ({
 
                   {/* Input Fields Grid: NOMOR PALLET DI SETIAP ITEM */}
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3">
-                    {/* 1. NOMOR PALLET DI SETIAP ITEM */}
+                    {/* 1. NOMOR PALLET & STATUS PALLET (OK / BO / HOLD) */}
                     <div className="lg:col-span-2">
                       <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
                         No Pallet <span className="text-red-500">*</span>
@@ -613,8 +618,37 @@ export const PalletInputForm: React.FC<PalletInputFormProps> = ({
                         placeholder="PLT-01"
                         className="w-full text-sm font-mono font-bold bg-amber-50/60 dark:bg-amber-950/30 border border-amber-300 dark:border-amber-800 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-500"
                       />
-                      <div className="text-[10px] text-slate-400 mt-1">
-                        Fisik pallet item ini
+                      <div className="mt-1.5 flex items-center gap-1">
+                        <span className="text-[10px] font-bold text-slate-500 mr-0.5 shrink-0">
+                          Status:
+                        </span>
+                        <div className="grid grid-cols-3 gap-1 flex-1">
+                          {PALLET_QC_STATUSES.map((st: PalletQcStatus) => {
+                            const activeStatus = row.statusQc || 'OK';
+                            const isSelected = activeStatus === st;
+                            const activeCls =
+                              st === 'OK'
+                                ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                                : st === 'BO'
+                                ? 'bg-amber-500 text-white border-amber-500 shadow-xs'
+                                : 'bg-rose-600 text-white border-rose-600 shadow-xs';
+                            const idleCls =
+                              'bg-slate-50 dark:bg-slate-950 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800';
+                            return (
+                              <button
+                                key={st}
+                                type="button"
+                                onClick={() => handleRowChange(row.id, 'statusQc', st)}
+                                className={`px-1 py-0.5 rounded border text-[10px] font-extrabold transition-colors cursor-pointer ${
+                                  isSelected ? activeCls : idleCls
+                                }`}
+                                title={`Set status pallet menjadi ${st}`}
+                              >
+                                {st}
+                              </button>
+                            );
+                          })}
+                        </div>
                       </div>
                     </div>
 
@@ -763,7 +797,7 @@ export const PalletInputForm: React.FC<PalletInputFormProps> = ({
                       </div>
                     </div>
 
-                    {/* 4. NO. BATCH 1 */}
+                    {/* 4. NO. BATCH 1 & LIVE ASAL PACKING */}
                     <div className="lg:col-span-2">
                       <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
                         {extraBatches.length > 0 ? 'No. Batch #1' : 'No. Batch'}{' '}
@@ -776,12 +810,31 @@ export const PalletInputForm: React.FC<PalletInputFormProps> = ({
                         onChange={(e) =>
                           handleRowChange(row.id, 'noBatch', e.target.value.toUpperCase())
                         }
-                        placeholder="B260101"
+                        placeholder="A260101 / B260101"
                         className="w-full text-sm font-mono bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg px-2.5 py-2 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
                       />
-                      <div className="text-[10px] text-slate-400 mt-1">
-                        Kode nomor batch
-                      </div>
+                      {(() => {
+                        const detectedPacking = deriveAsalPacking(row.noBatch);
+                        if (detectedPacking === 'Packing 1') {
+                          return (
+                            <div className="mt-1 inline-flex items-center px-1.5 py-0.5 rounded bg-indigo-100 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 text-[10px] font-bold">
+                              Asal: Packing 1
+                            </div>
+                          );
+                        }
+                        if (detectedPacking === 'Packing 2') {
+                          return (
+                            <div className="mt-1 inline-flex items-center px-1.5 py-0.5 rounded bg-purple-100 dark:bg-purple-950/70 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800 text-[10px] font-bold">
+                              Asal: Packing 2
+                            </div>
+                          );
+                        }
+                        return (
+                          <div className="text-[10px] text-slate-400 mt-1">
+                            Awali A (Packing 1) / B (Packing 2)
+                          </div>
+                        );
+                      })()}
                     </div>
 
                     {/* 5. NO. BOX AWAL & NO. BOX AKHIR (BATCH 1) */}
@@ -847,9 +900,16 @@ export const PalletInputForm: React.FC<PalletInputFormProps> = ({
                             </div>
 
                             <div className="sm:col-span-3">
-                              <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                                No. Batch #{bIdx + 2} <span className="text-red-500">*</span>
-                              </label>
+                              <div className="flex items-center justify-between gap-1 mb-1">
+                                <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300">
+                                  No. Batch #{bIdx + 2} <span className="text-red-500">*</span>
+                                </label>
+                                {deriveAsalPacking(eb.noBatch) !== '-' && (
+                                  <span className="text-[10px] font-bold text-indigo-700 dark:text-indigo-300">
+                                    {deriveAsalPacking(eb.noBatch)}
+                                  </span>
+                                )}
+                              </div>
                               <input
                                 type="text"
                                 required

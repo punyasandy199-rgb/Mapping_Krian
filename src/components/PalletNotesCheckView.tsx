@@ -41,6 +41,7 @@ export const PalletNotesCheckView: React.FC<PalletNotesCheckViewProps> = ({
   const [isSaving, setIsSaving] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [resolvingId, setResolvingId] = useState<string | null>(null);
+  const [markResolvedOnSave, setMarkResolvedOnSave] = useState<boolean>(true);
 
   // Filter strictly pallets that have non-empty "keterangan" (Keterangan / Catatan)
   const flaggedRecords = useMemo(() => {
@@ -97,6 +98,7 @@ export const PalletNotesCheckView: React.FC<PalletNotesCheckViewProps> = ({
             }
           ]
     );
+    setMarkResolvedOnSave(true);
     setEditError(null);
   };
 
@@ -188,9 +190,11 @@ export const PalletNotesCheckView: React.FC<PalletNotesCheckViewProps> = ({
       batchAwal: firstBatch.boxAwal,
       batchAkhir: firstBatch.boxAkhir,
       batches: cleanedBatches,
-      keterangan: (editingRecord.keterangan || '').trim(),
+      keterangan: markResolvedOnSave ? '' : (editingRecord.keterangan || '').trim(),
       updatedAt: new Date().toISOString(),
-      lastUpdateAction: 'Edit Tasklist Problem',
+      lastUpdateAction: markResolvedOnSave
+        ? 'Perbaikan & Selesai Tasklist Problem'
+        : 'Edit Tasklist Problem',
       ...(binChanged ? { binOrder: undefined } : {})
     };
 
@@ -666,17 +670,31 @@ export const PalletNotesCheckView: React.FC<PalletNotesCheckViewProps> = ({
               </div>
 
               {/* Keterangan / Catatan */}
-              <div>
-                <div className="flex items-center justify-between mb-1">
+              <div className="space-y-2">
+                <label className="flex items-start gap-2 p-2.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={markResolvedOnSave}
+                    onChange={(e) => setMarkResolvedOnSave(e.target.checked)}
+                    className="mt-0.5 rounded border-emerald-400 text-emerald-600"
+                  />
+                  <span className="text-[11px] text-emerald-900 dark:text-emerald-200 leading-snug">
+                    <strong>Otomatis tandai problem selesai saat disimpan</strong> (catatan
+                    problem akan dikosongkan otomatis setelah perbaikan ini disimpan).
+                  </span>
+                </label>
+
+                <div className="flex items-center justify-between">
                   <label className="font-bold text-slate-700 dark:text-slate-300">
-                    Keterangan / Catatan (Kosongkan jika sudah selesai dicek)
+                    Keterangan / Catatan
                   </label>
                   {editingRecord.keterangan && (
                     <button
                       type="button"
-                      onClick={() =>
-                        setEditingRecord({ ...editingRecord, keterangan: '' })
-                      }
+                      onClick={() => {
+                        setEditingRecord({ ...editingRecord, keterangan: '' });
+                        setMarkResolvedOnSave(true);
+                      }}
                       className="text-[11px] font-bold text-emerald-600 hover:underline cursor-pointer"
                     >
                       Kosongkan Catatan
@@ -685,11 +703,17 @@ export const PalletNotesCheckView: React.FC<PalletNotesCheckViewProps> = ({
                 </div>
                 <textarea
                   rows={2}
-                  value={editingRecord.keterangan || ''}
-                  onChange={(e) =>
-                    setEditingRecord({ ...editingRecord, keterangan: e.target.value })
+                  value={markResolvedOnSave ? '' : editingRecord.keterangan || ''}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setEditingRecord({ ...editingRecord, keterangan: val });
+                    setMarkResolvedOnSave(val.trim().length === 0);
+                  }}
+                  placeholder={
+                    markResolvedOnSave
+                      ? 'Catatan problem akan otomatis dibersihkan saat disimpan. Ketik di sini jika masih perlu catatan...'
+                      : 'Isi catatan pengecekan atau kosongkan untuk menandai selesai...'
                   }
-                  placeholder="Isi catatan pengecekan atau kosongkan untuk menandai selesai..."
                   className="w-full bg-amber-50/50 dark:bg-slate-950 border border-amber-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
                 />
               </div>

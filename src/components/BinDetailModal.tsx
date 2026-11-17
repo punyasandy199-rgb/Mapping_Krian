@@ -1,5 +1,12 @@
 import React, { useState } from 'react';
-import { PalletRecord } from '../types/warehouse';
+import {
+  PalletRecord,
+  SuratJalanRecord,
+  MasterWarehouse,
+  DEFAULT_MASTER_WAREHOUSES,
+  computePalletStockStatus,
+  resolvePalletWarehouseLocation
+} from '../types/warehouse';
 import { QrCodeRenderer } from './QrCodeRenderer';
 import { BarcodeRenderer } from './BarcodeRenderer';
 import { exportPalletsToCsv } from '../utils/exporter';
@@ -28,6 +35,8 @@ interface BinDetailModalProps {
   binCode: string | null;
   warehouseLabel?: string;
   records: PalletRecord[];
+  masterWarehouses?: MasterWarehouse[];
+  suratJalanHistory?: SuratJalanRecord[];
   isOpen: boolean;
   onClose: () => void;
   onPrintPallet?: (record: PalletRecord) => void;
@@ -41,6 +50,8 @@ export const BinDetailModal: React.FC<BinDetailModalProps> = ({
   binCode,
   warehouseLabel,
   records,
+  masterWarehouses = DEFAULT_MASTER_WAREHOUSES,
+  suratJalanHistory = [],
   isOpen,
   onClose,
   onPrintPallet,
@@ -349,22 +360,47 @@ export const BinDetailModal: React.FC<BinDetailModalProps> = ({
                           {idx + 1}
                         </td>
                       <td className="py-2.5 px-3 font-mono font-bold text-slate-900 dark:text-white">
-                        <div className="flex items-center gap-1.5">
-                          <span
-                            className={`px-2 py-0.5 rounded border text-xs ${
-                              isOut
-                                ? 'bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-300 dark:border-slate-700 line-through'
-                                : 'bg-amber-100 dark:bg-amber-950/60 text-amber-900 dark:text-amber-200 border-amber-300 dark:border-amber-900'
-                            }`}
-                          >
-                            {item.nomorPallet || '-'}
-                          </span>
-                          {isOut && (
-                            <span className="text-[10px] font-sans font-bold px-1.5 py-0.2 rounded bg-amber-100 text-amber-800 border border-amber-300">
-                              OUT: {item.tujuanPengambilan || 'Diambil'}
-                            </span>
-                          )}
-                        </div>
+                        {(() => {
+                          const linkedSj = suratJalanHistory.find(
+                            (sj) =>
+                              sj.id === item.suratJalanId ||
+                              sj.palletIds?.includes(item.id) ||
+                              (item.noSuratJalan &&
+                                sj.noSuratJalan?.toUpperCase() === item.noSuratJalan.toUpperCase())
+                          );
+                          const stockStatus = computePalletStockStatus(item, linkedSj);
+                          const whLoc = resolvePalletWarehouseLocation(item, masterWarehouses);
+                          return (
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span
+                                className={`px-2 py-0.5 rounded border text-xs ${
+                                  isOut
+                                    ? 'bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-300 dark:border-slate-700 line-through'
+                                    : 'bg-amber-100 dark:bg-amber-950/60 text-amber-900 dark:text-amber-200 border-amber-300 dark:border-amber-900'
+                                }`}
+                              >
+                                {item.nomorPallet || '-'}
+                              </span>
+                              <span
+                                className={`text-[10px] font-sans font-bold px-1.5 py-0.5 rounded border ${
+                                  stockStatus === 'Ada'
+                                    ? 'bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 border-emerald-300 dark:border-emerald-800'
+                                    : 'bg-rose-50 dark:bg-rose-950/50 text-rose-700 dark:text-rose-300 border-rose-300 dark:border-rose-800'
+                                }`}
+                              >
+                                Stok: {stockStatus}
+                              </span>
+                              <span className="text-[10px] font-sans font-semibold px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
+                                {whLoc}
+                              </span>
+                              {isOut && (
+                                <span className="text-[10px] font-sans font-bold px-1.5 py-0.2 rounded bg-amber-100 text-amber-800 border border-amber-300">
+                                  OUT: {item.tujuanPengambilan || 'Diambil'}
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })()}
                       </td>
                       <td className="py-2.5 px-3 font-mono font-bold text-blue-600 dark:text-blue-400">
                         {item.kodeItem || '-'}

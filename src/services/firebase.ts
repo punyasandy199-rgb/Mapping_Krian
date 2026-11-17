@@ -17,12 +17,30 @@ import { getAuth } from 'firebase/auth';
 import { PalletRecord, MasterItem } from '../types/warehouse';
 import firebaseConfig from '../../firebase-applet-config.json';
 
-// Initialize Firebase App
-const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
+// 1. Default Firebase App for Google Sign-In & Workspace Sheets OAuth (from firebase-applet-config.json)
+const oauthApp = !getApps().length ? initializeApp(firebaseConfig) : getApp();
+export const auth = getAuth(oauthApp);
 
-// CRITICAL: Must pass firestoreDatabaseId
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
-export const auth = getAuth(app);
+// 2. Original Warehouse Firestore Database (preserves existing pallet & Surat Jalan records)
+const WAREHOUSE_FIREBASE_CONFIG = {
+  projectId: 'gen-lang-client-0913601146',
+  appId: '1:384813567177:web:b8b5f68bd094b549f6d118',
+  apiKey: 'AIzaSyBPGoGQHLz5STAWbNHkg0uVSeejS2L9mfs',
+  authDomain: 'gen-lang-client-0913601146.firebaseapp.com',
+  firestoreDatabaseId: 'ai-studio-warehousepalletb-09b7e014-c1a5-48ba-b298-09265a692963',
+  storageBucket: 'gen-lang-client-0913601146.firebasestorage.app',
+  messagingSenderId: '384813567177'
+};
+
+const WAREHOUSE_APP_NAME = 'warehouse-data-app';
+const warehouseApp =
+  getApps().find((a) => a.name === WAREHOUSE_APP_NAME) ||
+  initializeApp(WAREHOUSE_FIREBASE_CONFIG, WAREHOUSE_APP_NAME);
+
+export const db = getFirestore(
+  warehouseApp,
+  WAREHOUSE_FIREBASE_CONFIG.firestoreDatabaseId
+);
 
 export enum OperationType {
   CREATE = 'create',
@@ -747,6 +765,64 @@ export async function deleteMasterWarehouse(warehouseId: string): Promise<void> 
     handleFirestoreError(error, OperationType.DELETE, `${WAREHOUSES_COLLECTION}/${warehouseId}`);
   }
 }
+
+// -------------------------------------------------------------
+// GOOGLE SHEETS BRIDGE SETTINGS (SHARED ACROSS ALL DEVICES)
+// -------------------------------------------------------------
+const APP_SETTINGS_COLLECTION = 'test';
+const SHEETS_BRIDGE_DOC_ID = 'google_sheets_bridge';
+
+export type SheetsSyncMode = 'apps_script' | 'oauth';
+
+export interface SheetsBridgeConfig {
+  syncMode: SheetsSyncMode;
+  appsScriptUrl: string;
+  appsScriptSecret: string;
+  spreadsheetUrl: string;
+  palletTabTitle: string;
+  includeSuratJalanTab: boolean;
+  includeManualSjTab?: boolean;
+  manualSjSpreadsheetUrl?: string;
+  includeRekapTab: boolean;
+  autoSync24x7Enabled: boolean;
+  lastSyncedAt?: string;
+  lastSyncedSummary?: string;
+  updatedAt: string;
+}
+
+export function subscribeToSheetsBridgeConfig(
+  onUpdate: (config: SheetsBridgeConfig | null) => void
+): () => void {
+  const ref = doc(db, APP_SETTINGS_COLLECTION, SHEETS_BRIDGE_DOC_ID);
+  const unsubscribe = onSnapshot(
+    ref,
+    (docSnap) => {
+      if (docSnap.exists()) {
+        onUpdate(docSnap.data() as SheetsBridgeConfig);
+      } else {
+        onUpdate(null);
+      }
+    },
+    (error) => {
+      console.error('Snapshot error for google_sheets_bridge:', error);
+    }
+  );
+  return unsubscribe;
+}
+
+export async function saveSheetsBridgeConfig(config: SheetsBridgeConfig): Promise<void> {
+  try {
+    const ref = doc(db, APP_SETTINGS_COLLECTION, SHEETS_BRIDGE_DOC_ID);
+    await setDoc(ref, sanitizeForFirestore(config));
+  } catch (error) {
+    handleFirestoreError(
+      error,
+      OperationType.WRITE,
+      `${APP_SETTINGS_COLLECTION}/${SHEETS_BRIDGE_DOC_ID}`
+    );
+  }
+}
+
 
 
 
