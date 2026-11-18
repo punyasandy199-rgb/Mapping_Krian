@@ -363,6 +363,29 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
         masterWarehouses
       );
 
+    const changedFields: string[] = [];
+    if (originalRecord) {
+      if ((originalRecord.nomorPallet || '').toUpperCase() !== noPalletClean) changedFields.push('No. Pallet');
+      if (resolvePalletQcStatus(originalRecord) !== resolvePalletQcStatus(editingRecord)) changedFields.push('Status');
+      if ((originalRecord.lokasiGudang || '') !== resolvedGudang) changedFields.push('Gudang');
+      if ((originalRecord.lokasiBin || '').toUpperCase() !== binClean) changedFields.push('Bin');
+      if ((originalRecord.namaBarang || '') !== namaClean || (originalRecord.kodeItem || '').toUpperCase() !== kodeClean) {
+        changedFields.push('Barang');
+      }
+      if (Number(originalRecord.qtyPallet) !== qtyNum) changedFields.push('Qty');
+      if ((originalRecord.noBatch || '').toUpperCase() !== combinedNoBatch.toUpperCase() ||
+          (originalRecord.boxAwal || '').toUpperCase() !== firstBatch.boxAwal ||
+          (originalRecord.boxAkhir || '').toUpperCase() !== firstBatch.boxAkhir) {
+        changedFields.push('Batch/Box');
+      }
+      if ((originalRecord.operHistory || []).length !== cleanedOperHistory.length) {
+        changedFields.push('Oper Gudang');
+      }
+      if ((originalRecord.keterangan || '').trim() !== (editingRecord.keterangan?.trim() || '')) {
+        changedFields.push('Keterangan');
+      }
+    }
+
     const updated: PalletRecord = {
       ...editingRecord,
       nomorPallet: noPalletClean,
@@ -384,6 +407,11 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
       batchAkhir: firstBatch.boxAkhir,
       batches: cleanedBatches,
       keterangan: editingRecord.keterangan?.trim() || '',
+      updatedAt: new Date().toISOString(),
+      lastUpdateAction:
+        changedFields.length > 0
+          ? `Edit Data (${changedFields.join(', ')})`
+          : 'Edit Data Pallet',
       ...(binChanged ? { binOrder: undefined } : {})
     };
 

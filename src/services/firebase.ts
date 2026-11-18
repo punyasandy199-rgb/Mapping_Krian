@@ -784,6 +784,7 @@ export interface SheetsBridgeConfig {
   includeManualSjTab?: boolean;
   manualSjSpreadsheetUrl?: string;
   includeRekapTab: boolean;
+  lockSheetReadOnly?: boolean;
   autoSync24x7Enabled: boolean;
   lastSyncedAt?: string;
   lastSyncedSummary?: string;

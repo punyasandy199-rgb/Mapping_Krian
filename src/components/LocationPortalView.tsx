@@ -19,7 +19,8 @@ import {
   AlertTriangle,
   Building2,
   LayoutGrid,
-  Settings2
+  Settings2,
+  FileText
 } from 'lucide-react';
 
 interface LocationPortalViewProps {
@@ -27,6 +28,7 @@ interface LocationPortalViewProps {
   selectedLocationGroup: WarehouseLocationGroup | null;
   onSelectLocationGroup: (group: WarehouseLocationGroup | null) => void;
   onSelectWarehouse: (warehouse: MasterWarehouse) => void;
+  onOpenSuratJalan: () => void;
   onOpenWarehouseManagement: () => void;
   records: PalletRecord[];
   totalSuratJalan: number;
@@ -53,6 +55,7 @@ export const LocationPortalView: React.FC<LocationPortalViewProps> = ({
   selectedLocationGroup,
   onSelectLocationGroup,
   onSelectWarehouse,
+  onOpenSuratJalan,
   onOpenWarehouseManagement,
   records,
   totalSuratJalan,
@@ -306,6 +309,21 @@ export const LocationPortalView: React.FC<LocationPortalViewProps> = ({
                   </button>
                 );
               })}
+            </div>
+
+            {/* Akses Langsung Penerbitan Surat Jalan Manual di Bawah 3 Kotak Gudang */}
+            <div className="mt-6 sm:mt-8">
+              <button
+                type="button"
+                onClick={onOpenSuratJalan}
+                className="group w-full rounded-2xl px-6 py-4 sm:py-5 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800/80 border border-slate-200 dark:border-slate-800 hover:border-blue-400 dark:hover:border-blue-600 shadow-sm hover:shadow-lg hover:-translate-y-0.5 transition-all duration-200 flex items-center justify-center gap-3 cursor-pointer focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-400"
+              >
+                <FileText className="w-5 h-5 text-blue-600 dark:text-blue-400 shrink-0" />
+                <h2 className="text-lg sm:text-xl font-extrabold tracking-tight text-slate-950 dark:text-white text-center">
+                  Penerbitan Surat Jalan Manual
+                </h2>
+                <ArrowRight className="w-5 h-5 text-blue-600 dark:text-blue-400 group-hover:translate-x-1 transition-transform shrink-0" />
+              </button>
             </div>
           </div>
         ) : (

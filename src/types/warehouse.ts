@@ -130,6 +130,8 @@ export interface SuratJalanRecord {
   grandTotalKg: number;
   note?: string;
   createdAt: string;
+  updatedAt?: string;
+  lastUpdateAction?: string;
 }
 
 export interface PalletBatchEntry {

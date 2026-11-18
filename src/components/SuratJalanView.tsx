@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
   PalletRecord,
   MasterItem,
@@ -6,7 +6,8 @@ import {
   MasterVendor,
   MasterRouteTariff,
   SuratJalanRecord,
-  SuratJalanItemLine
+  SuratJalanItemLine,
+  BlacklistRecord
 } from '../types/warehouse';
 import {
   FileText,
@@ -25,6 +26,7 @@ import {
   Layers,
   ArrowRight,
   ShieldCheck,
+  ShieldAlert,
   Building,
   User,
   Phone,
@@ -34,7 +36,10 @@ import {
   Trash2,
   Save,
   X,
-  PackagePlus
+  PackagePlus,
+  History,
+  ChevronDown,
+  AlertTriangle
 } from 'lucide-react';
 import { SuratJalanPrintModal, SuratJalanPrintModel } from './SuratJalanPrintModal';
 import { getPalletBatches } from '../utils/batchCalculator';
@@ -46,7 +51,41 @@ interface SuratJalanViewProps {
   masterVendors: MasterVendor[];
   masterTariffs?: MasterRouteTariff[];
   suratJalanHistory: SuratJalanRecord[];
+  blacklistRecords?: BlacklistRecord[];
   onSaveSuratJalan: (record: SuratJalanRecord) => Promise<void>;
+  onDeleteSuratJalan?: (record: SuratJalanRecord) => Promise<void>;
+}
+
+function normalizeNopol(nopol?: string): string {
+  return (nopol || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
+interface VehicleDriverHistoryVariant {
+  namaDriver: string;
+  noHpDriver: string;
+  lastUsedDate: string;
+  noSuratJalan: string;
+}
+
+interface VehicleNopolHistoryEntry {
+  normalizedNopol: string;
+  displayNopol: string;
+  latestDriver: string;
+  latestHp: string;
+  latestVendor: string;
+  tripCount: number;
+  lastUsedDate: string;
+  lastDestination: string;
+  driverVariants: VehicleDriverHistoryVariant[];
+  recentTrips: {
+    id: string;
+    noSuratJalan: string;
+    tanggal: string;
+    tujuan: string;
+    vendor: string;
+    namaDriver: string;
+    noHpDriver: string;
+  }[];
 }
 
 // Helper to extract Gudang number from lokasiBin (e.g., "5A.1" -> "5", "GUDANG 3-A1" -> "3")
@@ -60,14 +99,29 @@ function extractGudangNumber(lokasiBin: string): string | null {
   return null;
 }
 
-// Generate auto No Surat Jalan like FGW/26/XI/032
-function generateAutoSuratJalanNo(count: number): string {
+// Generate auto No Surat Jalan like FGW/26/XI/032 (using max sequence of current month/year)
+function generateAutoSuratJalanNo(historyOrCount: SuratJalanRecord[] | number): string {
   const now = new Date();
   const year2Dig = String(now.getFullYear()).slice(-2);
   const romanMonths = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 'XI', 'XII'];
   const romanMonth = romanMonths[now.getMonth()];
-  const seq = String(count + 1).padStart(3, '0');
-  return `FGW/${year2Dig}/${romanMonth}/${seq}`;
+  const prefix = `FGW/${year2Dig}/${romanMonth}/`;
+
+  let nextSeq = typeof historyOrCount === 'number' ? historyOrCount + 1 : historyOrCount.length + 1;
+  if (Array.isArray(historyOrCount)) {
+    let maxSeq = 0;
+    historyOrCount.forEach((sj) => {
+      const no = (sj.noSuratJalan || '').trim().toUpperCase();
+      if (no.startsWith(prefix)) {
+        const tail = parseInt(no.slice(prefix.length), 10);
+        if (!isNaN(tail) && tail > maxSeq) maxSeq = tail;
+      }
+    });
+    nextSeq = Math.max(maxSeq + 1, 1);
+  }
+
+  const seq = String(nextSeq).padStart(3, '0');
+  return `${prefix}${seq}`;
 }
 
 function incrementSuratJalanNo(baseNo: string, offset: number): string {
@@ -156,7 +210,9 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
   masterVendors,
   masterTariffs = [],
   suratJalanHistory,
-  onSaveSuratJalan
+  blacklistRecords = [],
+  onSaveSuratJalan,
+  onDeleteSuratJalan
 }) => {
   // Sub-tabs: Buat Baru vs Riwayat Surat Jalan
   const [activeSubTab, setActiveSubTab] = useState<'create' | 'history'>('create');
@@ -181,8 +237,9 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
   const [noInvoice, setNoInvoice] = useState<string>('');
   const [tglJamCetakCustom, setTglJamCetakCustom] = useState<string>('');
 
-  const initialSjNo = generateAutoSuratJalanNo(suratJalanHistory.length);
+  const initialSjNo = generateAutoSuratJalanNo(suratJalanHistory);
   const [noSuratJalan, setNoSuratJalan] = useState<string>(initialSjNo);
+  const hasManualSjNoEditRef = useRef<boolean>(false);
 
   // Multi-Surat Jalan (jumlah surat jalan yang dicetak beserta baris nopol & pallet masing-masing)
   const [jumlahSuratJalan, setJumlahSuratJalan] = useState<number>(1);
@@ -196,6 +253,26 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
       note: ''
     }
   ]);
+
+  // Nopol History Combobox & Auto-fill tracking per slot
+  const [openNopolDropdownIdx, setOpenNopolDropdownIdx] = useState<number | null>(null);
+  const [expandedHistorySlotIdx, setExpandedHistorySlotIdx] = useState<number | null>(null);
+  const [autoFilledMetaBySlot, setAutoFilledMetaBySlot] = useState<
+    Record<number, { normalizedNopol: string; driver: string; hp: string }>
+  >({});
+  const [openEditNopolDropdown, setOpenEditNopolDropdown] = useState<boolean>(false);
+
+  // Blacklist confirmation dialog state when using a blacklisted Nopol/Driver/Vendor
+  const [blacklistConfirmModal, setBlacklistConfirmModal] = useState<{
+    mode: 'create' | 'edit';
+    openPrintAfter?: boolean;
+    matches: {
+      slotLabel: string;
+      noPolisi: string;
+      driver: string;
+      blacklist: BlacklistRecord;
+    }[];
+  } | null>(null);
 
   // Peta assignment pallet.id -> sjIndex (0-based)
   const [palletAssignments, setPalletAssignments] = useState<Record<string, number>>({});
@@ -224,6 +301,10 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
   const [isSavingEdit, setIsSavingEdit] = useState<boolean>(false);
   const [editSuccessMsg, setEditSuccessMsg] = useState<string | null>(null);
 
+  // Delete confirmation state (Riwayat Surat Jalan)
+  const [confirmDeleteSjId, setConfirmDeleteSjId] = useState<string | null>(null);
+  const [isDeletingSj, setIsDeletingSj] = useState<boolean>(false);
+
   // Pencarian & Inline Input No. SPP / No. PO pada Riwayat Surat Jalan Terbit
   const [historySearch, setHistorySearch] = useState<string>('');
   const [historyDocFilter, setHistoryDocFilter] = useState<'ALL' | 'FILLED' | 'MISSING'>('ALL');
@@ -231,6 +312,128 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
   const [inlineNoSpp, setInlineNoSpp] = useState<string>('');
   const [inlineNoPo, setInlineNoPo] = useState<string>('');
   const [isSavingInlineDoc, setIsSavingInlineDoc] = useState<boolean>(false);
+
+  // Update auto SJ number cleanly when Firestore history finishes loading (if user hasn't edited it manually)
+  useEffect(() => {
+    if (hasManualSjNoEditRef.current) return;
+    const computed = generateAutoSuratJalanNo(suratJalanHistory);
+    setNoSuratJalan(computed);
+    setArmadaEntries((prev) =>
+      prev.map((entry, idx) => ({
+        ...entry,
+        noSuratJalan: idx === 0 ? computed : incrementSuratJalanNo(computed, idx)
+      }))
+    );
+  }, [suratJalanHistory]);
+
+  // Build Vehicle Nopol History Index (sorted newest first)
+  const vehicleHistoryList = useMemo<VehicleNopolHistoryEntry[]>(() => {
+    const sorted = [...suratJalanHistory].sort(
+      (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+    );
+    const map = new Map<string, VehicleNopolHistoryEntry>();
+
+    sorted.forEach((sj) => {
+      const rawNopol = (sj.noPolisi || '').trim().toUpperCase();
+      const norm = normalizeNopol(rawNopol);
+      if (!norm) return;
+
+      const driver = (sj.namaDriver || '').trim();
+      const hp = (sj.noHpDriver || '').trim();
+      const vendor = (sj.namaVendorArmada || '').trim();
+      const tanggal = sj.tanggalPengambilanFormatted || sj.tanggal || '';
+      const tujuan = sj.ruteTujuanKode || sj.ruteTujuanNama || '-';
+
+      let entry = map.get(norm);
+      if (!entry) {
+        entry = {
+          normalizedNopol: norm,
+          displayNopol: rawNopol,
+          latestDriver: driver,
+          latestHp: hp,
+          latestVendor: vendor,
+          tripCount: 0,
+          lastUsedDate: tanggal,
+          lastDestination: tujuan,
+          driverVariants: [],
+          recentTrips: []
+        };
+        map.set(norm, entry);
+      } else {
+        // Prefer nicely spaced version of nopol for display (e.g., "AB 8996 OE" over "AB8996OE")
+        if (!entry.displayNopol.includes(' ') && rawNopol.includes(' ')) {
+          entry.displayNopol = rawNopol;
+        }
+        if (!entry.latestDriver && driver) entry.latestDriver = driver;
+        if (!entry.latestHp && hp) entry.latestHp = hp;
+      }
+
+      entry.tripCount += 1;
+
+      if (driver || hp) {
+        const variantKey = `${driver.toLowerCase()}::${hp.replace(/\s+/g, '')}`;
+        const alreadyHasVariant = entry.driverVariants.some(
+          (v) => `${v.namaDriver.toLowerCase()}::${v.noHpDriver.replace(/\s+/g, '')}` === variantKey
+        );
+        if (!alreadyHasVariant) {
+          entry.driverVariants.push({
+            namaDriver: driver || '-',
+            noHpDriver: hp || '-',
+            lastUsedDate: tanggal,
+            noSuratJalan: sj.noSuratJalan
+          });
+        }
+      }
+
+      entry.recentTrips.push({
+        id: sj.id,
+        noSuratJalan: sj.noSuratJalan,
+        tanggal,
+        tujuan,
+        vendor,
+        namaDriver: driver || '-',
+        noHpDriver: hp || '-'
+      });
+    });
+
+    return Array.from(map.values());
+  }, [suratJalanHistory]);
+
+  const vehicleHistoryMap = useMemo(() => {
+    const m = new Map<string, VehicleNopolHistoryEntry>();
+    vehicleHistoryList.forEach((v) => m.set(v.normalizedNopol, v));
+    return m;
+  }, [vehicleHistoryList]);
+
+  // Active blacklist lookup helpers
+  const activeBlacklistRecords = useMemo(
+    () => blacklistRecords.filter((b) => b.status !== 'RESOLVED'),
+    [blacklistRecords]
+  );
+
+  const findBlacklistForNopol = (nopol?: string): BlacklistRecord | undefined => {
+    const norm = normalizeNopol(nopol);
+    if (!norm) return undefined;
+    return activeBlacklistRecords.find(
+      (b) => b.tipe === 'NOPOL' && normalizeNopol(b.identifier) === norm
+    );
+  };
+
+  const findBlacklistForDriver = (driver?: string): BlacklistRecord | undefined => {
+    const clean = (driver || '').trim().toLowerCase();
+    if (!clean) return undefined;
+    return activeBlacklistRecords.find(
+      (b) => b.tipe === 'DRIVER' && b.identifier.trim().toLowerCase() === clean
+    );
+  };
+
+  const findBlacklistForVendor = (vendor?: string): BlacklistRecord | undefined => {
+    const clean = (vendor || '').trim().toLowerCase();
+    if (!clean) return undefined;
+    return activeBlacklistRecords.find(
+      (b) => b.tipe === 'VENDOR' && b.identifier.trim().toLowerCase() === clean
+    );
+  };
 
   // Deduplicate masterRoutes by kodeLokasi & namaLokasi so dropdown never shows duplicate route names
   const uniqueMasterRoutes = useMemo(() => {
@@ -524,7 +727,7 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
     setJumlahSuratJalan(count);
     setActiveSjIndex((prev) => Math.min(prev, count - 1));
 
-    const baseSj = noSuratJalan.trim() || generateAutoSuratJalanNo(suratJalanHistory.length);
+    const baseSj = noSuratJalan.trim() || generateAutoSuratJalanNo(suratJalanHistory);
     setArmadaEntries((prev) => {
       const next: SuratJalanArmadaEntry[] = [];
       for (let i = 0; i < count; i++) {
@@ -564,8 +767,133 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
       prev.map((entry, i) => (i === idx ? { ...entry, [field]: value } : entry))
     );
     if (idx === 0 && field === 'noSuratJalan') {
+      hasManualSjNoEditRef.current = true;
       setNoSuratJalan(value);
     }
+  };
+
+  // Auto-fill namaDriver & noHpDriver ketika Nopol cocok dengan history kendaraan
+  const handleNopolInputChange = (idx: number, rawVal: string) => {
+    setFormError(null);
+    const upperVal = rawVal.toUpperCase();
+    const norm = normalizeNopol(upperVal);
+    const matchedHistory = norm ? vehicleHistoryMap.get(norm) : undefined;
+    const prevAuto = autoFilledMetaBySlot[idx];
+
+    setArmadaEntries((prev) =>
+      prev.map((entry, i) => {
+        if (i !== idx) return entry;
+        const nextEntry: SuratJalanArmadaEntry = { ...entry, noPolisi: upperVal };
+
+        if (matchedHistory) {
+          const isDriverEmpty = !entry.namaDriver.trim();
+          const isHpEmpty = !entry.noHpDriver.trim();
+          const wasAutoDriver = prevAuto && entry.namaDriver === prevAuto.driver;
+          const wasAutoHp = prevAuto && entry.noHpDriver === prevAuto.hp;
+
+          if ((isDriverEmpty && isHpEmpty) || (wasAutoDriver && wasAutoHp)) {
+            nextEntry.namaDriver = matchedHistory.latestDriver;
+            nextEntry.noHpDriver = matchedHistory.latestHp;
+          }
+        }
+        return nextEntry;
+      })
+    );
+
+    if (matchedHistory) {
+      setAutoFilledMetaBySlot((prev) => ({
+        ...prev,
+        [idx]: {
+          normalizedNopol: matchedHistory.normalizedNopol,
+          driver: matchedHistory.latestDriver,
+          hp: matchedHistory.latestHp
+        }
+      }));
+    } else if (prevAuto && norm !== prevAuto.normalizedNopol) {
+      setAutoFilledMetaBySlot((prev) => {
+        const copy = { ...prev };
+        delete copy[idx];
+        return copy;
+      });
+    }
+  };
+
+  const handleSelectVehicleFromHistory = (
+    idx: number,
+    vehicle: VehicleNopolHistoryEntry,
+    variant?: VehicleDriverHistoryVariant
+  ) => {
+    setFormError(null);
+    const chosenDriver = variant ? (variant.namaDriver === '-' ? '' : variant.namaDriver) : vehicle.latestDriver;
+    const chosenHp = variant ? (variant.noHpDriver === '-' ? '' : variant.noHpDriver) : vehicle.latestHp;
+
+    setArmadaEntries((prev) =>
+      prev.map((entry, i) =>
+        i === idx
+          ? {
+              ...entry,
+              noPolisi: vehicle.displayNopol,
+              namaDriver: chosenDriver,
+              noHpDriver: chosenHp
+            }
+          : entry
+      )
+    );
+    setAutoFilledMetaBySlot((prev) => ({
+      ...prev,
+      [idx]: {
+        normalizedNopol: vehicle.normalizedNopol,
+        driver: chosenDriver,
+        hp: chosenHp
+      }
+    }));
+    setOpenNopolDropdownIdx(null);
+  };
+
+  const findBlacklistMatchesForEntries = (
+    slots: SuratJalanArmadaEntry[],
+    vendorName?: string
+  ) => {
+    const matches: {
+      slotLabel: string;
+      noPolisi: string;
+      driver: string;
+      blacklist: BlacklistRecord;
+    }[] = [];
+
+    slots.forEach((slot, i) => {
+      const slotLabel = slots.length > 1 ? `Surat Jalan #${i + 1} (${slot.noSuratJalan})` : slot.noSuratJalan || 'Surat Jalan';
+      const blNopol = findBlacklistForNopol(slot.noPolisi);
+      if (blNopol) {
+        matches.push({
+          slotLabel,
+          noPolisi: slot.noPolisi.trim().toUpperCase(),
+          driver: slot.namaDriver.trim(),
+          blacklist: blNopol
+        });
+      }
+      const blDriver = findBlacklistForDriver(slot.namaDriver);
+      if (blDriver) {
+        matches.push({
+          slotLabel,
+          noPolisi: slot.noPolisi.trim().toUpperCase(),
+          driver: slot.namaDriver.trim(),
+          blacklist: blDriver
+        });
+      }
+    });
+
+    const blVendor = findBlacklistForVendor(vendorName);
+    if (blVendor) {
+      matches.push({
+        slotLabel: 'Vendor Armada',
+        noPolisi: slots[0]?.noPolisi?.trim().toUpperCase() || '-',
+        driver: vendorName || '-',
+        blacklist: blVendor
+      });
+    }
+
+    return matches;
   };
 
   const handleToggleSelectPallet = (id: string) => {
@@ -858,45 +1186,9 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
   };
 
   // Submit Surat Jalan (1 atau beberapa sekaligus, wajib input barang manual jika tidak ada pallet dipilih)
-  const handleCreateSuratJalan = async () => {
+  const executeCreateSuratJalan = async () => {
     setFormError(null);
-
     const activeSlots = armadaEntries.slice(0, jumlahSuratJalan);
-    const missingNopolIdx = activeSlots.findIndex((s) => !s.noPolisi.trim());
-    if (missingNopolIdx !== -1) {
-      setFormError(
-        jumlahSuratJalan > 1
-          ? `Nomor Polisi kendaraan pada Surat Jalan #${missingNopolIdx + 1} wajib diisi.`
-          : 'Nomor Polisi kendaraan wajib diisi.'
-      );
-      return;
-    }
-
-    // Validasi: bila ada SJ tanpa pallet dipilih, wajib isi minimal 1 barang & jumlah box (> 0)
-    for (let i = 0; i < jumlahSuratJalan; i++) {
-      const sjPallets = perSjSummaries[i]?.pallets || [];
-      if (sjPallets.length === 0) {
-        const manualRows = getManualRowsForSj(i);
-        const partialRow = manualRows.find((r) => {
-          const hasName = r.namaBarang.trim().length > 0;
-          const qty = parseFloat(r.qtyBox) || 0;
-          return (hasName && qty <= 0) || (!hasName && qty > 0);
-        });
-        if (partialRow) {
-          setFormError(
-            `${jumlahSuratJalan > 1 ? `Pada SJ #${i + 1}: ` : ''}Lengkapi Nama Barang dan Jumlah Box (> 0) pada baris barang manual.`
-          );
-          return;
-        }
-        const validSummary = buildItemsSummaryFromManualRows(manualRows);
-        if (validSummary.itemsSummary.length === 0) {
-          setFormError(
-            `${jumlahSuratJalan > 1 ? `Pada SJ #${i + 1}: ` : ''}Karena tidak ada pallet yang dipilih, wajib menginput Nama Barang dan Jumlah Box (> 0) agar produk tampil pada Surat Jalan.`
-          );
-          return;
-        }
-      }
-    }
 
     setIsSubmitting(true);
     try {
@@ -907,7 +1199,7 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
       const formattedTanggalCetak = formatDateOnlyIndoFromDate(effectivePrintDate);
       const formattedWaktuCetak = formatWaktuCetakIndoFromDate(effectivePrintDate);
 
-      const baseNo = noSuratJalan.trim() || generateAutoSuratJalanNo(suratJalanHistory.length);
+      const baseNo = noSuratJalan.trim() || generateAutoSuratJalanNo(suratJalanHistory);
       const createdRecords: SuratJalanRecord[] = [];
 
       for (let i = 0; i < jumlahSuratJalan; i++) {
@@ -969,7 +1261,12 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
           grandTotalBox: slotSummary.grandTotalBox,
           grandTotalKg: slotSummary.grandTotalKg,
           note: slot.note.trim(),
-          createdAt: new Date(now.getTime() + i).toISOString()
+          createdAt: new Date(now.getTime() + i).toISOString(),
+          updatedAt: new Date(now.getTime() + i).toISOString(),
+          lastUpdateAction:
+            slotSummary.pallets.length === 0
+              ? `Buat Surat Jalan Manual (${sjNo})`
+              : `Buat Surat Jalan (${sjNo})`
         };
 
         await onSaveSuratJalan(newRecord);
@@ -982,9 +1279,13 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
       setIsPrintModalOpen(true);
 
       // Reset form & regenerate next sequential No. SJ
-      const nextBaseNo = generateAutoSuratJalanNo(suratJalanHistory.length + createdRecords.length);
+      hasManualSjNoEditRef.current = false;
+      const nextBaseNo = generateAutoSuratJalanNo([...suratJalanHistory, ...createdRecords]);
       setPalletAssignments({});
       setManualItemsBySj({});
+      setAutoFilledMetaBySlot({});
+      setOpenNopolDropdownIdx(null);
+      setExpandedHistorySlotIdx(null);
       setJumlahSuratJalan(1);
       setActiveSjIndex(0);
       setArmadaEntries([
@@ -1015,6 +1316,63 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
     } finally {
       setIsSubmitting(false);
     }
+  };
+
+  const handleCreateSuratJalan = async () => {
+    setFormError(null);
+
+    const activeSlots = armadaEntries.slice(0, jumlahSuratJalan);
+    const missingNopolIdx = activeSlots.findIndex((s) => !s.noPolisi.trim());
+    if (missingNopolIdx !== -1) {
+      setFormError(
+        jumlahSuratJalan > 1
+          ? `Nomor Polisi kendaraan pada Surat Jalan #${missingNopolIdx + 1} wajib diisi.`
+          : 'Nomor Polisi kendaraan wajib diisi.'
+      );
+      return;
+    }
+
+    // Validasi: bila ada SJ tanpa pallet dipilih, wajib isi minimal 1 barang & jumlah box (> 0)
+    for (let i = 0; i < jumlahSuratJalan; i++) {
+      const sjPallets = perSjSummaries[i]?.pallets || [];
+      if (sjPallets.length === 0) {
+        const manualRows = getManualRowsForSj(i);
+        const partialRow = manualRows.find((r) => {
+          const hasName = r.namaBarang.trim().length > 0;
+          const qty = parseFloat(r.qtyBox) || 0;
+          return (hasName && qty <= 0) || (!hasName && qty > 0);
+        });
+        if (partialRow) {
+          setFormError(
+            `${jumlahSuratJalan > 1 ? `Pada SJ #${i + 1}: ` : ''}Lengkapi Nama Barang dan Jumlah Box (> 0) pada baris barang manual.`
+          );
+          return;
+        }
+        const validSummary = buildItemsSummaryFromManualRows(manualRows);
+        if (validSummary.itemsSummary.length === 0) {
+          setFormError(
+            `${jumlahSuratJalan > 1 ? `Pada SJ #${i + 1}: ` : ''}Karena tidak ada pallet yang dipilih, wajib menginput Nama Barang dan Jumlah Box (> 0) agar produk tampil pada Surat Jalan.`
+          );
+          return;
+        }
+      }
+    }
+
+    // Cek Master Blacklist Kendaraan/Driver/Vendor sebelum menerbitkan SJ
+    const activeVendorName =
+      customVendorNama ||
+      masterVendors.find((v) => v.id === selectedVendorId)?.namaVendor ||
+      '';
+    const blMatches = findBlacklistMatchesForEntries(activeSlots, activeVendorName);
+    if (blMatches.length > 0) {
+      setBlacklistConfirmModal({
+        mode: 'create',
+        matches: blMatches
+      });
+      return;
+    }
+
+    await executeCreateSuratJalan();
   };
 
   // Handlers untuk Edit Surat Jalan di Riwayat
@@ -1091,6 +1449,89 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
     });
   };
 
+  const executeSaveEditedSuratJalan = async (openPrintAfter = false) => {
+    if (!editingRecord) return;
+    setEditError(null);
+
+    const cleanedItems = editingRecord.itemsSummary
+      .map((it) => {
+        const qty = Number(it.qtyBox) || 0;
+        const berat = Number(it.beratPerBoxKg) || 0;
+        return {
+          ...it,
+          namaBarang: it.namaBarang.trim(),
+          kodeItem: (it.kodeItem || '-').trim(),
+          detailBarang: it.detailBarang.trim() || `(1 X ${berat} KG)`,
+          qtyBox: qty,
+          beratPerBoxKg: berat,
+          totalKg: Math.round(qty * berat * 100) / 100
+        };
+      })
+      .filter((it) => it.namaBarang !== '' || it.qtyBox > 0);
+
+    setIsSavingEdit(true);
+    try {
+      const parsedPrintDt = parseCustomDatetimeLocal(editTglJamInput.trim());
+      const formattedTanggalOnly = parsedPrintDt
+        ? formatDateOnlyIndoFromDate(parsedPrintDt)
+        : editingRecord.tanggalPengambilanFormatted;
+      const formattedWaktuCetak = parsedPrintDt
+        ? formatWaktuCetakIndoFromDate(parsedPrintDt)
+        : editingRecord.waktuCetakFormatted;
+
+      const tarifVal = Number(editingRecord.tarif) || 0;
+      const ppnVal = Number(editingRecord.ppnPersen) || 0;
+      const grandTotalBox = cleanedItems.reduce((sum, it) => sum + it.qtyBox, 0);
+      const grandTotalKg = cleanedItems.reduce((sum, it) => sum + it.totalKg, 0);
+
+      const updatedRecord: SuratJalanRecord = {
+        ...editingRecord,
+        noSuratJalan: editingRecord.noSuratJalan.trim(),
+        noPolisi: editingRecord.noPolisi.trim().toUpperCase(),
+        noSpp: (editingRecord.noSpp || '').trim() || '-',
+        noPo: editingRecord.noPo.trim() || '-',
+        noKontainer: (editingRecord.noKontainer || '').trim() || '-',
+        noFaktur: (editingRecord.noFaktur || '').trim() || '-',
+        noInvoice: (editingRecord.noInvoice || '').trim() || '-',
+        namaVendorArmada: editingRecord.namaVendorArmada.trim() || 'Vendor Armada',
+        namaDriver: editingRecord.namaDriver.trim(),
+        noHpDriver: editingRecord.noHpDriver.trim(),
+        note: (editingRecord.note || '').trim(),
+        tarif: tarifVal,
+        ppnPersen: ppnVal,
+        tarifTotal: tarifVal + (tarifVal * ppnVal) / 100,
+        tanggalPengambilanFormatted: formattedTanggalOnly,
+        ...(editTglJamInput.trim() ? { tglJamCetakCustom: editTglJamInput.trim() } : {}),
+        ...(formattedWaktuCetak ? { waktuCetakFormatted: formattedWaktuCetak } : {}),
+        itemsSummary: cleanedItems,
+        grandTotalBox,
+        grandTotalKg,
+        updatedAt: new Date().toISOString(),
+        lastUpdateAction: `Edit Surat Jalan (${editingRecord.noSuratJalan.trim()})`
+      };
+
+      if (!editTglJamInput.trim()) {
+        delete updatedRecord.tglJamCetakCustom;
+      }
+
+      await onSaveSuratJalan(updatedRecord);
+      setEditingRecord(null);
+      setOpenEditNopolDropdown(false);
+      setEditSuccessMsg(`Surat Jalan ${updatedRecord.noSuratJalan} berhasil diperbarui.`);
+
+      if (openPrintAfter) {
+        setPreviewRecord(updatedRecord);
+        setPreviewRecords([updatedRecord]);
+        setIsPrintModalOpen(true);
+      }
+    } catch (err) {
+      console.error('Gagal menyimpan perubahan surat jalan:', err);
+      setEditError('Terjadi kesalahan saat menyimpan perubahan Surat Jalan.');
+    } finally {
+      setIsSavingEdit(false);
+    }
+  };
+
   const handleSaveEditedSuratJalan = async (openPrintAfter = false) => {
     if (!editingRecord) return;
     setEditError(null);
@@ -1130,63 +1571,41 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
       return;
     }
 
-    setIsSavingEdit(true);
+    const blMatches = findBlacklistMatchesForEntries(
+      [
+        {
+          noSuratJalan: editingRecord.noSuratJalan,
+          noPolisi: editingRecord.noPolisi,
+          namaDriver: editingRecord.namaDriver,
+          noHpDriver: editingRecord.noHpDriver,
+          note: editingRecord.note || ''
+        }
+      ],
+      editingRecord.namaVendorArmada
+    );
+    if (blMatches.length > 0) {
+      setBlacklistConfirmModal({
+        mode: 'edit',
+        openPrintAfter,
+        matches: blMatches
+      });
+      return;
+    }
+
+    await executeSaveEditedSuratJalan(openPrintAfter);
+  };
+
+  const handleDeleteSjRow = async (sj: SuratJalanRecord) => {
+    if (!onDeleteSuratJalan) return;
+    setIsDeletingSj(true);
     try {
-      const parsedPrintDt = parseCustomDatetimeLocal(editTglJamInput.trim());
-      const formattedTanggalOnly = parsedPrintDt
-        ? formatDateOnlyIndoFromDate(parsedPrintDt)
-        : editingRecord.tanggalPengambilanFormatted;
-      const formattedWaktuCetak = parsedPrintDt
-        ? formatWaktuCetakIndoFromDate(parsedPrintDt)
-        : editingRecord.waktuCetakFormatted;
-
-      const tarifVal = Number(editingRecord.tarif) || 0;
-      const ppnVal = Number(editingRecord.ppnPersen) || 0;
-      const grandTotalBox = cleanedItems.reduce((sum, it) => sum + it.qtyBox, 0);
-      const grandTotalKg = cleanedItems.reduce((sum, it) => sum + it.totalKg, 0);
-
-      const updatedRecord: SuratJalanRecord = {
-        ...editingRecord,
-        noSuratJalan: editingRecord.noSuratJalan.trim(),
-        noPolisi: editingRecord.noPolisi.trim().toUpperCase(),
-        noSpp: (editingRecord.noSpp || '').trim() || '-',
-        noPo: editingRecord.noPo.trim() || '-',
-        noKontainer: (editingRecord.noKontainer || '').trim() || '-',
-        noFaktur: (editingRecord.noFaktur || '').trim() || '-',
-        noInvoice: (editingRecord.noInvoice || '').trim() || '-',
-        namaVendorArmada: editingRecord.namaVendorArmada.trim() || 'Vendor Armada',
-        namaDriver: editingRecord.namaDriver.trim(),
-        noHpDriver: editingRecord.noHpDriver.trim(),
-        note: (editingRecord.note || '').trim(),
-        tarif: tarifVal,
-        ppnPersen: ppnVal,
-        tarifTotal: tarifVal + (tarifVal * ppnVal) / 100,
-        tanggalPengambilanFormatted: formattedTanggalOnly,
-        ...(editTglJamInput.trim() ? { tglJamCetakCustom: editTglJamInput.trim() } : {}),
-        ...(formattedWaktuCetak ? { waktuCetakFormatted: formattedWaktuCetak } : {}),
-        itemsSummary: cleanedItems,
-        grandTotalBox,
-        grandTotalKg
-      };
-
-      if (!editTglJamInput.trim()) {
-        delete updatedRecord.tglJamCetakCustom;
-      }
-
-      await onSaveSuratJalan(updatedRecord);
-      setEditingRecord(null);
-      setEditSuccessMsg(`Surat Jalan ${updatedRecord.noSuratJalan} berhasil diperbarui.`);
-
-      if (openPrintAfter) {
-        setPreviewRecord(updatedRecord);
-        setPreviewRecords([updatedRecord]);
-        setIsPrintModalOpen(true);
-      }
+      await onDeleteSuratJalan(sj);
+      setConfirmDeleteSjId(null);
+      setEditSuccessMsg(`Surat Jalan ${sj.noSuratJalan} berhasil dihapus.`);
     } catch (err) {
-      console.error('Gagal menyimpan perubahan surat jalan:', err);
-      setEditError('Terjadi kesalahan saat menyimpan perubahan Surat Jalan.');
+      console.error('Gagal menghapus Surat Jalan:', err);
     } finally {
-      setIsSavingEdit(false);
+      setIsDeletingSj(false);
     }
   };
 
@@ -1246,7 +1665,9 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
       const updatedRecord: SuratJalanRecord = {
         ...sj,
         noSpp: inlineNoSpp.trim() || '-',
-        noPo: inlineNoPo.trim() || '-'
+        noPo: inlineNoPo.trim() || '-',
+        updatedAt: new Date().toISOString(),
+        lastUpdateAction: `Update No. SPP / PO (${sj.noSuratJalan})`
       };
       await onSaveSuratJalan(updatedRecord);
       setInlineDocEditId(null);
@@ -1285,11 +1706,11 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
           </div>
 
           {/* Sub-tab switches */}
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
               onClick={() => setActiveSubTab('create')}
-              className={`flex items-center gap-2 px-3.5 py-2 text-xs font-semibold rounded-lg transition-colors ${
+              className={`flex items-center gap-2 px-3.5 py-2 text-xs font-semibold rounded-lg transition-colors cursor-pointer ${
                 activeSubTab === 'create'
                   ? 'bg-blue-600 text-white shadow-xs'
                   : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200'
@@ -1302,7 +1723,7 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
             <button
               type="button"
               onClick={() => setActiveSubTab('history')}
-              className={`flex items-center gap-2 px-3.5 py-2 text-xs font-semibold rounded-lg transition-colors ${
+              className={`flex items-center gap-2 px-3.5 py-2 text-xs font-semibold rounded-lg transition-colors cursor-pointer ${
                 activeSubTab === 'history'
                   ? 'bg-blue-600 text-white shadow-xs'
                   : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200'
@@ -1367,6 +1788,7 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
                   type="text"
                   value={noSuratJalan}
                   onChange={(e) => {
+                    hasManualSjNoEditRef.current = true;
                     const val = e.target.value;
                     setNoSuratJalan(val);
                     setArmadaEntries((prev) =>
@@ -1797,13 +2219,32 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
                   {armadaEntries.slice(0, jumlahSuratJalan).map((entry, idx) => {
                     const isSjActive = activeSjIndex === idx;
                     const sjPalletCount = perSjSummaries[idx]?.pallets.length || 0;
+                    const normNopol = normalizeNopol(entry.noPolisi);
+                    const matchedHistory = normNopol ? vehicleHistoryMap.get(normNopol) : undefined;
+                    const blNopol = findBlacklistForNopol(entry.noPolisi);
+                    const blDriver = findBlacklistForDriver(entry.namaDriver);
+                    const blVendor = idx === 0 ? findBlacklistForVendor(customVendorNama) : undefined;
+                    const activeSlotBlacklist = blNopol || blDriver || blVendor;
+                    const isDropdownOpen = openNopolDropdownIdx === idx;
+                    const filteredNopolOptions = vehicleHistoryList.filter((v) => {
+                      if (!normNopol) return true;
+                      return (
+                        v.normalizedNopol.includes(normNopol) ||
+                        v.displayNopol.toLowerCase().includes(entry.noPolisi.trim().toLowerCase()) ||
+                        v.latestDriver.toLowerCase().includes(entry.noPolisi.trim().toLowerCase())
+                      );
+                    });
+                    const isExpandedTrips = expandedHistorySlotIdx === idx;
+
                     return (
                       <div
                         key={idx}
                         className={`rounded-xl border p-3 transition-colors ${
-                          jumlahSuratJalan > 1 && isSjActive
-                            ? 'bg-blue-50/40 dark:bg-blue-950/20 border-blue-300 dark:border-blue-800'
-                            : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800'
+                          activeSlotBlacklist
+                            ? 'bg-rose-50/40 dark:bg-rose-950/20 border-rose-400 dark:border-rose-700'
+                            : jumlahSuratJalan > 1 && isSjActive
+                              ? 'bg-blue-50/40 dark:bg-blue-950/20 border-blue-300 dark:border-blue-800'
+                              : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800'
                         }`}
                       >
                         {jumlahSuratJalan > 1 && (
@@ -1841,20 +2282,121 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
                         )}
 
                         <div className="grid grid-cols-1 md:grid-cols-12 gap-3">
-                          <div className="md:col-span-3">
-                            <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                              Nopol Kendaraan {jumlahSuratJalan > 1 ? `#${idx + 1}` : ''} *
+                          <div className="md:col-span-3 relative">
+                            <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1 flex items-center justify-between gap-1">
+                              <span>Nopol Kendaraan {jumlahSuratJalan > 1 ? `#${idx + 1}` : ''} *</span>
+                              {vehicleHistoryList.length > 0 && (
+                                <span className="text-[10px] font-normal text-blue-600 dark:text-blue-400">
+                                  {vehicleHistoryList.length} history
+                                </span>
+                              )}
                             </label>
-                            <input
-                              type="text"
-                              required
-                              value={entry.noPolisi}
-                              onChange={(e) =>
-                                handleUpdateArmadaEntry(idx, 'noPolisi', e.target.value.toUpperCase())
-                              }
-                              placeholder="Contoh: AB 8996 OE"
-                              className="w-full font-bold uppercase tracking-wider bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-100"
-                            />
+                            <div className="relative">
+                              <input
+                                type="text"
+                                required
+                                value={entry.noPolisi}
+                                onFocus={() => setOpenNopolDropdownIdx(idx)}
+                                onBlur={() => {
+                                  setTimeout(() => {
+                                    setOpenNopolDropdownIdx((cur) => (cur === idx ? null : cur));
+                                  }, 180);
+                                }}
+                                onChange={(e) => {
+                                  handleNopolInputChange(idx, e.target.value);
+                                  setOpenNopolDropdownIdx(idx);
+                                }}
+                                placeholder="Ketik / pilih nopol kendaraan..."
+                                className={`w-full font-bold uppercase tracking-wider bg-slate-50 dark:bg-slate-800 border rounded-lg pl-3 pr-8 py-2 text-slate-900 dark:text-slate-100 ${
+                                  blNopol
+                                    ? 'border-rose-500 ring-2 ring-rose-500/20 text-rose-700 dark:text-rose-300'
+                                    : 'border-slate-300 dark:border-slate-700'
+                                }`}
+                              />
+                              <button
+                                type="button"
+                                onMouseDown={(e) => {
+                                  e.preventDefault();
+                                  setOpenNopolDropdownIdx(isDropdownOpen ? null : idx);
+                                }}
+                                className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-blue-600 cursor-pointer"
+                                title="Lihat daftar Nopol dari riwayat"
+                              >
+                                <ChevronDown className={`w-4 h-4 transition-transform ${isDropdownOpen ? 'rotate-180' : ''}`} />
+                              </button>
+                            </div>
+
+                            {isDropdownOpen && vehicleHistoryList.length > 0 && (
+                              <div className="absolute z-30 left-0 right-0 sm:min-w-[340px] mt-1 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl shadow-xl max-h-64 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800">
+                                <div className="px-3 py-1.5 bg-slate-50 dark:bg-slate-800/80 text-[10px] font-bold text-slate-500 uppercase tracking-wider flex items-center justify-between sticky top-0">
+                                  <span>Daftar Nopol &amp; Sopir Terakhir</span>
+                                  <button
+                                    type="button"
+                                    onMouseDown={(e) => {
+                                      e.preventDefault();
+                                      setOpenNopolDropdownIdx(null);
+                                    }}
+                                    className="text-slate-400 hover:text-slate-700 cursor-pointer"
+                                  >
+                                    <X className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                                {filteredNopolOptions.length === 0 ? (
+                                  <div className="px-3 py-3 text-[11px] text-slate-400 text-center">
+                                    Nopol baru — belum ada di riwayat Surat Jalan
+                                  </div>
+                                ) : (
+                                  filteredNopolOptions.map((v) => {
+                                    const vBl = findBlacklistForNopol(v.displayNopol);
+                                    return (
+                                      <button
+                                        key={v.normalizedNopol}
+                                        type="button"
+                                        onMouseDown={(e) => {
+                                          e.preventDefault();
+                                          handleSelectVehicleFromHistory(idx, v);
+                                        }}
+                                        className={`w-full text-left px-3 py-2 transition-colors cursor-pointer ${
+                                          vBl
+                                            ? 'bg-rose-50/70 dark:bg-rose-950/30 hover:bg-rose-100/80'
+                                            : 'hover:bg-blue-50 dark:hover:bg-slate-800'
+                                        }`}
+                                      >
+                                        <div className="flex items-center justify-between gap-2">
+                                          <div className="flex items-center gap-1.5">
+                                            <span className="font-mono font-extrabold text-xs text-slate-900 dark:text-white">
+                                              {v.displayNopol}
+                                            </span>
+                                            {vBl && (
+                                              <span className="px-1.5 py-0.5 rounded bg-rose-600 text-white text-[9px] font-bold uppercase">
+                                                BLACKLIST
+                                              </span>
+                                            )}
+                                          </div>
+                                          <span className="px-1.5 py-0.5 rounded bg-blue-100 dark:bg-blue-950 text-blue-700 dark:text-blue-300 text-[10px] font-bold">
+                                            {v.tripCount}x pakai
+                                          </span>
+                                        </div>
+                                        <div className="text-[11px] text-slate-600 dark:text-slate-300 mt-0.5 flex flex-wrap items-center gap-x-2">
+                                          <span className="font-semibold">
+                                            {v.latestDriver || '(Tanpa nama sopir)'}
+                                          </span>
+                                          {v.latestHp && (
+                                            <span className="font-mono text-slate-500">
+                                              &bull; {v.latestHp}
+                                            </span>
+                                          )}
+                                        </div>
+                                        <div className="text-[10px] text-slate-400 mt-0.5 truncate">
+                                          Terakhir {v.lastUsedDate} &rarr; {v.lastDestination}
+                                          {vBl ? ` | Alasan: ${vBl.alasan}` : ''}
+                                        </div>
+                                      </button>
+                                    );
+                                  })
+                                )}
+                              </div>
+                            )}
                           </div>
 
                           <div className="md:col-span-3">
@@ -1868,7 +2410,7 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
                               onChange={(e) =>
                                 handleUpdateArmadaEntry(idx, 'namaDriver', e.target.value)
                               }
-                              placeholder="Nama pengemudi armada"
+                              placeholder="Otomatis terisi dari history nopol"
                               className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-100"
                             />
                           </div>
@@ -1884,7 +2426,7 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
                               onChange={(e) =>
                                 handleUpdateArmadaEntry(idx, 'noHpDriver', e.target.value)
                               }
-                              placeholder="0812-xxxx-xxxx"
+                              placeholder="Otomatis terisi dari history nopol"
                               className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-100"
                             />
                           </div>
@@ -1904,6 +2446,135 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
                             />
                           </div>
                         </div>
+
+                        {/* Notifikasi Blacklist Real-Time */}
+                        {(blNopol || blDriver || blVendor) && (
+                          <div className="mt-2.5 p-3 rounded-xl bg-rose-50 dark:bg-rose-950/60 border border-rose-300 dark:border-rose-700 text-rose-800 dark:text-rose-200 flex items-start gap-2.5">
+                            <ShieldAlert className="w-5 h-5 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
+                            <div className="text-[11px] space-y-1">
+                              <div className="font-extrabold uppercase tracking-wide text-rose-700 dark:text-rose-300">
+                                Peringatan Blacklist Armada!
+                              </div>
+                              {blNopol && (
+                                <p>
+                                  Nopol <span className="font-mono font-bold">{entry.noPolisi.trim().toUpperCase()}</span> berada dalam daftar <strong>BLACKLIST</strong>.{' '}
+                                  Keterangan ditolak: <span className="font-bold underline">{blNopol.alasan}</span>
+                                  {blNopol.tanggal ? ` (${blNopol.tanggal})` : ''}
+                                </p>
+                              )}
+                              {blDriver && (
+                                <p>
+                                  Driver <span className="font-bold">{entry.namaDriver}</span> berada dalam daftar <strong>BLACKLIST</strong>.{' '}
+                                  Keterangan ditolak: <span className="font-bold underline">{blDriver.alasan}</span>
+                                </p>
+                              )}
+                              {blVendor && (
+                                <p>
+                                  Vendor <span className="font-bold">{customVendorNama}</span> berada dalam daftar <strong>BLACKLIST</strong>.{' '}
+                                  Keterangan ditolak: <span className="font-bold underline">{blVendor.alasan}</span>
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Panel History Kendaraan Otomatis */}
+                        {matchedHistory && (
+                          <div className="mt-2.5 p-2.5 rounded-xl bg-blue-50/70 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800/70 text-[11px] space-y-2">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <div className="flex flex-wrap items-center gap-2 text-blue-900 dark:text-blue-200">
+                                <History className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                                <span className="font-bold">
+                                  History Nopol <span className="font-mono">{matchedHistory.displayNopol}</span>
+                                </span>
+                                <span className="px-1.5 py-0.5 rounded bg-blue-600 text-white text-[10px] font-bold">
+                                  {matchedHistory.tripCount}x Digunakan
+                                </span>
+                                <span className="text-slate-600 dark:text-slate-300">
+                                  Terakhir: {matchedHistory.lastUsedDate || '-'} &rarr; {matchedHistory.lastDestination}
+                                </span>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setExpandedHistorySlotIdx(isExpandedTrips ? null : idx)
+                                }
+                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-white dark:bg-slate-800 border border-blue-200 dark:border-slate-700 text-blue-700 dark:text-blue-300 text-[10px] font-bold hover:bg-blue-100 cursor-pointer"
+                              >
+                                <span>{isExpandedTrips ? 'Tutup Riwayat' : 'Lihat Riwayat Trip'}</span>
+                                <ChevronDown className={`w-3 h-3 transition-transform ${isExpandedTrips ? 'rotate-180' : ''}`} />
+                              </button>
+                            </div>
+
+                            {matchedHistory.driverVariants.length > 1 && (
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                <span className="text-[10px] font-semibold text-slate-500">
+                                  Riwayat Sopir untuk Nopol ini:
+                                </span>
+                                {matchedHistory.driverVariants.map((variant, vIdx) => {
+                                  const isCurrentVariant =
+                                    entry.namaDriver.trim().toLowerCase() === variant.namaDriver.toLowerCase() &&
+                                    entry.noHpDriver.trim() === (variant.noHpDriver === '-' ? '' : variant.noHpDriver);
+                                  return (
+                                    <button
+                                      key={vIdx}
+                                      type="button"
+                                      onClick={() => handleSelectVehicleFromHistory(idx, matchedHistory, variant)}
+                                      className={`px-2 py-0.5 rounded-md text-[10px] font-semibold border transition-colors cursor-pointer ${
+                                        isCurrentVariant
+                                          ? 'bg-blue-600 text-white border-blue-600'
+                                          : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 border-slate-300 dark:border-slate-700 hover:border-blue-400'
+                                      }`}
+                                    >
+                                      {variant.namaDriver} ({variant.noHpDriver})
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            )}
+
+                            {isExpandedTrips && (
+                              <div className="overflow-x-auto rounded-lg border border-blue-200/80 dark:border-slate-700 bg-white dark:bg-slate-900">
+                                <table className="w-full text-left text-[10px] border-collapse">
+                                  <thead className="bg-slate-50 dark:bg-slate-800 text-slate-500 font-semibold border-b border-slate-200 dark:border-slate-700">
+                                    <tr>
+                                      <th className="py-1.5 px-2">No. Surat Jalan</th>
+                                      <th className="py-1.5 px-2">Tanggal</th>
+                                      <th className="py-1.5 px-2">Tujuan</th>
+                                      <th className="py-1.5 px-2">Vendor</th>
+                                      <th className="py-1.5 px-2">Sopir</th>
+                                      <th className="py-1.5 px-2">No. HP</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                                    {matchedHistory.recentTrips.map((trip) => (
+                                      <tr key={trip.id}>
+                                        <td className="py-1.5 px-2 font-mono font-bold text-blue-600 dark:text-blue-400">
+                                          {trip.noSuratJalan}
+                                        </td>
+                                        <td className="py-1.5 px-2 text-slate-600 dark:text-slate-300">
+                                          {trip.tanggal}
+                                        </td>
+                                        <td className="py-1.5 px-2 font-medium text-slate-800 dark:text-slate-200">
+                                          {trip.tujuan}
+                                        </td>
+                                        <td className="py-1.5 px-2 text-slate-600 dark:text-slate-300">
+                                          {trip.vendor}
+                                        </td>
+                                        <td className="py-1.5 px-2 font-semibold text-slate-800 dark:text-slate-200">
+                                          {trip.namaDriver}
+                                        </td>
+                                        <td className="py-1.5 px-2 font-mono text-slate-600 dark:text-slate-300">
+                                          {trip.noHpDriver}
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
                     );
                   })}
@@ -2717,7 +3388,7 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
                     <th className="py-2.5 px-3">Nopol Kendaraan</th>
                     <th className="py-2.5 px-3">Vendor / Driver</th>
                     <th className="py-2.5 px-3 text-right">Total Box &amp; Berat</th>
-                    <th className="py-2.5 px-3 text-center w-44">Aksi</th>
+                    <th className="py-2.5 px-3 text-center w-28">Aksi</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
@@ -2861,29 +3532,62 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
                           </div>
                         </td>
                         <td className="py-2.5 px-3 text-center">
-                          <div className="flex items-center justify-center gap-1.5">
-                            <button
-                              type="button"
-                              onClick={() => handleOpenEditModal(sj)}
-                              className="flex items-center gap-1 px-2.5 py-1 text-xs font-semibold bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800 rounded-lg hover:bg-amber-100 transition-colors cursor-pointer whitespace-nowrap"
-                              title="Edit Surat Jalan"
-                            >
-                              <Edit3 className="w-3.5 h-3.5" />
-                              <span>Edit</span>
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setPreviewRecord(sj);
-                                setPreviewRecords([sj]);
-                                setIsPrintModalOpen(true);
-                              }}
-                              className="flex items-center gap-1 px-2.5 py-1 text-xs font-semibold bg-blue-50 dark:bg-blue-950 text-blue-600 dark:text-blue-400 rounded-lg hover:bg-blue-100 transition-colors cursor-pointer whitespace-nowrap"
-                            >
-                              <Printer className="w-3.5 h-3.5" />
-                              <span>Cetak Ulang</span>
-                            </button>
-                          </div>
+                          {confirmDeleteSjId === sj.id ? (
+                            <div className="flex items-center justify-center gap-1">
+                              <button
+                                type="button"
+                                disabled={isDeletingSj}
+                                onClick={() => handleDeleteSjRow(sj)}
+                                className="px-2 py-1 text-[10px] font-bold bg-rose-600 hover:bg-rose-700 text-white rounded-md cursor-pointer disabled:opacity-50"
+                              >
+                                {isDeletingSj ? 'Menghapus...' : 'Ya, Hapus'}
+                              </button>
+                              <button
+                                type="button"
+                                disabled={isDeletingSj}
+                                onClick={() => setConfirmDeleteSjId(null)}
+                                className="px-2 py-1 text-[10px] font-semibold bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-md cursor-pointer"
+                              >
+                                Batal
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="flex items-center justify-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => handleOpenEditModal(sj)}
+                                className="p-1.5 text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/60 border border-amber-200 dark:border-amber-800 rounded-lg hover:bg-amber-100 transition-colors cursor-pointer"
+                                title="Edit Surat Jalan"
+                                aria-label="Edit Surat Jalan"
+                              >
+                                <Edit3 className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setPreviewRecord(sj);
+                                  setPreviewRecords([sj]);
+                                  setIsPrintModalOpen(true);
+                                }}
+                                className="p-1.5 text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 rounded-lg hover:bg-blue-100 transition-colors cursor-pointer"
+                                title="Cetak Ulang Surat Jalan"
+                                aria-label="Cetak Ulang Surat Jalan"
+                              >
+                                <Printer className="w-3.5 h-3.5" />
+                              </button>
+                              {onDeleteSuratJalan && (
+                                <button
+                                  type="button"
+                                  onClick={() => setConfirmDeleteSjId(sj.id)}
+                                  className="p-1.5 text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-800 rounded-lg hover:bg-rose-100 transition-colors cursor-pointer"
+                                  title="Hapus Surat Jalan"
+                                  aria-label="Hapus Surat Jalan"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                            </div>
+                          )}
                         </td>
                       </tr>
                     );
@@ -3106,21 +3810,102 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
 
               {/* Armada, Vendor, Driver & Tarif */}
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-                <div>
+                <div className="relative">
                   <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
                     Nopol Kendaraan *
                   </label>
-                  <input
-                    type="text"
-                    value={editingRecord.noPolisi}
-                    onChange={(e) =>
-                      setEditingRecord({
-                        ...editingRecord,
-                        noPolisi: e.target.value.toUpperCase()
-                      })
-                    }
-                    className="w-full font-bold uppercase bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2"
-                  />
+                  <div className="relative">
+                    <input
+                      type="text"
+                      value={editingRecord.noPolisi}
+                      onFocus={() => setOpenEditNopolDropdown(true)}
+                      onBlur={() => {
+                        setTimeout(() => setOpenEditNopolDropdown(false), 180);
+                      }}
+                      onChange={(e) => {
+                        const upper = e.target.value.toUpperCase();
+                        const norm = normalizeNopol(upper);
+                        const hist = norm ? vehicleHistoryMap.get(norm) : undefined;
+                        setEditingRecord((prev) => {
+                          if (!prev) return prev;
+                          const shouldAutoFill =
+                            hist && !prev.namaDriver.trim() && !prev.noHpDriver.trim();
+                          return {
+                            ...prev,
+                            noPolisi: upper,
+                            ...(shouldAutoFill
+                              ? {
+                                  namaDriver: hist.latestDriver,
+                                  noHpDriver: hist.latestHp
+                                }
+                              : {})
+                          };
+                        });
+                        setOpenEditNopolDropdown(true);
+                      }}
+                      className="w-full font-bold uppercase bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg pl-3 pr-8 py-2"
+                    />
+                    {vehicleHistoryList.length > 0 && (
+                      <button
+                        type="button"
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          setOpenEditNopolDropdown((v) => !v);
+                        }}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-blue-600 cursor-pointer"
+                      >
+                        <ChevronDown className={`w-4 h-4 transition-transform ${openEditNopolDropdown ? 'rotate-180' : ''}`} />
+                      </button>
+                    )}
+                  </div>
+
+                  {openEditNopolDropdown && vehicleHistoryList.length > 0 && (
+                    <div className="absolute z-30 left-0 right-0 sm:min-w-[300px] mt-1 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl shadow-xl max-h-56 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800">
+                      {vehicleHistoryList
+                        .filter((v) => {
+                          const norm = normalizeNopol(editingRecord.noPolisi);
+                          return !norm || v.normalizedNopol.includes(norm);
+                        })
+                        .map((v) => {
+                          const vBl = findBlacklistForNopol(v.displayNopol);
+                          return (
+                            <button
+                              key={v.normalizedNopol}
+                              type="button"
+                              onMouseDown={(e) => {
+                                e.preventDefault();
+                                setEditingRecord((prev) =>
+                                  prev
+                                    ? {
+                                        ...prev,
+                                        noPolisi: v.displayNopol,
+                                        namaDriver: v.latestDriver || prev.namaDriver,
+                                        noHpDriver: v.latestHp || prev.noHpDriver
+                                      }
+                                    : prev
+                                );
+                                setOpenEditNopolDropdown(false);
+                              }}
+                              className="w-full text-left px-3 py-2 hover:bg-blue-50 dark:hover:bg-slate-800 cursor-pointer"
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="font-mono font-bold text-slate-900 dark:text-white">
+                                  {v.displayNopol}
+                                </span>
+                                {vBl && (
+                                  <span className="px-1.5 py-0.5 rounded bg-rose-600 text-white text-[9px] font-bold">
+                                    BLACKLIST
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-[10px] text-slate-500">
+                                {v.latestDriver || '-'} {v.latestHp ? `(${v.latestHp})` : ''} &bull; {v.tripCount}x
+                              </div>
+                            </button>
+                          );
+                        })}
+                    </div>
+                  )}
                 </div>
 
                 <div>
@@ -3164,6 +3949,36 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
                     className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2"
                   />
                 </div>
+
+                {(() => {
+                  const editBlNopol = findBlacklistForNopol(editingRecord.noPolisi);
+                  const editBlDriver = findBlacklistForDriver(editingRecord.namaDriver);
+                  const editBlVendor = findBlacklistForVendor(editingRecord.namaVendorArmada);
+                  if (!editBlNopol && !editBlDriver && !editBlVendor) return null;
+                  return (
+                    <div className="sm:col-span-2 lg:col-span-4 p-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-300 dark:border-rose-700 text-rose-800 dark:text-rose-200 flex items-start gap-2 text-[11px]">
+                      <ShieldAlert className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                      <div>
+                        <strong className="uppercase">Peringatan Blacklist:</strong>{' '}
+                        {editBlNopol && (
+                          <span>
+                            Nopol <strong>{editingRecord.noPolisi}</strong> terdaftar blacklist ({editBlNopol.alasan}).{' '}
+                          </span>
+                        )}
+                        {editBlDriver && (
+                          <span>
+                            Driver <strong>{editingRecord.namaDriver}</strong> terdaftar blacklist ({editBlDriver.alasan}).{' '}
+                          </span>
+                        )}
+                        {editBlVendor && (
+                          <span>
+                            Vendor <strong>{editingRecord.namaVendorArmada}</strong> terdaftar blacklist ({editBlVendor.alasan}).
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 <div>
                   <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
@@ -3395,6 +4210,84 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
               >
                 <Printer className="w-4 h-4" />
                 <span>Simpan &amp; Cetak</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Konfirmasi Penggunaan Armada Blacklist */}
+      {blacklistConfirmModal && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/80 backdrop-blur-xs p-4">
+          <div className="bg-white dark:bg-slate-900 border-2 border-rose-500 rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden">
+            <div className="px-5 py-4 bg-rose-600 text-white flex items-center gap-3">
+              <AlertTriangle className="w-6 h-6 shrink-0" />
+              <div>
+                <h3 className="text-sm font-extrabold uppercase tracking-wide">
+                  Peringatan Armada Blacklist!
+                </h3>
+                <p className="text-[11px] text-rose-100">
+                  Data kendaraan/armada terdeteksi berada di Master Blacklist
+                </p>
+              </div>
+            </div>
+
+            <div className="p-5 space-y-4 text-xs">
+              <div className="space-y-2.5 max-h-60 overflow-y-auto">
+                {blacklistConfirmModal.matches.map((m, mIdx) => (
+                  <div
+                    key={mIdx}
+                    className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 space-y-1"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-bold text-rose-800 dark:text-rose-200">
+                        {m.blacklist.tipe}:{' '}
+                        <span className="font-mono uppercase">{m.blacklist.identifier}</span>
+                      </span>
+                      <span className="text-[10px] font-mono text-rose-600 dark:text-rose-400">
+                        {m.slotLabel}
+                      </span>
+                    </div>
+                    <p className="text-rose-700 dark:text-rose-300">
+                      <strong>Keterangan Ditolak:</strong> {m.blacklist.alasan}
+                    </p>
+                    {m.blacklist.tanggal && (
+                      <p className="text-[10px] text-rose-500">
+                        Tanggal Blacklist: {m.blacklist.tanggal}
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-300 dark:border-amber-800 text-amber-900 dark:text-amber-200 font-bold text-center text-xs">
+                Apakah Anda yakin akan tetap menggunakan armada tersebut untuk Surat Jalan ini?
+              </div>
+            </div>
+
+            <div className="px-5 py-3.5 bg-slate-50 dark:bg-slate-800/60 border-t border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-end gap-2.5">
+              <button
+                type="button"
+                onClick={() => setBlacklistConfirmModal(null)}
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-slate-200 dark:bg-slate-700 text-slate-800 dark:text-slate-100 hover:bg-slate-300 transition-colors cursor-pointer"
+              >
+                Batal, Ganti Armada
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  const modalData = blacklistConfirmModal;
+                  setBlacklistConfirmModal(null);
+                  if (modalData.mode === 'create') {
+                    await executeCreateSuratJalan();
+                  } else {
+                    await executeSaveEditedSuratJalan(Boolean(modalData.openPrintAfter));
+                  }
+                }}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold bg-rose-600 hover:bg-rose-700 text-white shadow-sm transition-colors cursor-pointer"
+              >
+                <ShieldAlert className="w-4 h-4" />
+                <span>Ya, Yakin Tetap Gunakan Armada</span>
               </button>
             </div>
           </div>

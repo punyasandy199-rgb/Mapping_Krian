@@ -114,12 +114,18 @@ export function extractSpreadsheetId(input: string): string {
   return trimmed;
 }
 
+export interface SheetProtectedRangeInfo {
+  protectedRangeId: number;
+  description?: string;
+}
+
 export interface SheetTabInfo {
   sheetId: number;
   title: string;
   index: number;
   rowCount: number;
   columnCount: number;
+  protectedRanges?: SheetProtectedRangeInfo[];
 }
 
 export interface SpreadsheetMetadata {
@@ -184,7 +190,7 @@ export async function fetchSpreadsheetMetadata(
   const spreadsheetId = extractSpreadsheetId(spreadsheetIdInput);
   const url = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
     spreadsheetId
-  )}?fields=spreadsheetId,properties.title,sheets.properties(sheetId,title,index,gridProperties)`;
+  )}?fields=spreadsheetId,properties.title,sheets(properties(sheetId,title,index,gridProperties),protectedRanges(protectedRangeId,description))`;
 
   const data = await sheetsFetch(url, { method: 'GET' });
   const sheets: SheetTabInfo[] = Array.isArray(data?.sheets)
@@ -193,7 +199,13 @@ export async function fetchSpreadsheetMetadata(
         title: String(s?.properties?.title ?? 'Sheet1'),
         index: Number(s?.properties?.index ?? 0),
         rowCount: Number(s?.properties?.gridProperties?.rowCount ?? 1000),
-        columnCount: Number(s?.properties?.gridProperties?.columnCount ?? 26)
+        columnCount: Number(s?.properties?.gridProperties?.columnCount ?? 26),
+        protectedRanges: Array.isArray(s?.protectedRanges)
+          ? s.protectedRanges.map((pr: any) => ({
+              protectedRangeId: Number(pr?.protectedRangeId ?? 0),
+              description: pr?.description ? String(pr.description) : ''
+            }))
+          : []
       }))
     : [];
 
@@ -862,6 +874,7 @@ export interface SyncAllOptions {
   syncManualSjTab?: boolean;
   manualSjSpreadsheetId?: string;
   syncRekapTab?: boolean;
+  lockSheetReadOnly?: boolean;
 }
 
 export interface SyncAllResult {
@@ -874,6 +887,62 @@ export interface SyncAllResult {
   rekapRowsCount: number;
   bridgeVersion?: number;
   syncedAt: string;
+}
+
+const READ_ONLY_LOCK_DESC = 'PalletTrack Read-Only Lock';
+
+async function applySheetProtectionsViaApi(
+  spreadsheetId: string,
+  meta: SpreadsheetMetadata,
+  targetTitles: string[],
+  shouldLock: boolean
+): Promise<void> {
+  const targetSet = new Set(targetTitles);
+  const requests: any[] = [];
+
+  meta.sheets.forEach((sheet) => {
+    if (!targetSet.has(sheet.title)) return;
+    const existingLocks = (sheet.protectedRanges || []).filter(
+      (pr) => pr.description === READ_ONLY_LOCK_DESC && pr.protectedRangeId
+    );
+    if (shouldLock) {
+      if (existingLocks.length === 0) {
+        requests.push({
+          addProtectedRange: {
+            protectedRange: {
+              range: { sheetId: sheet.sheetId },
+              description: READ_ONLY_LOCK_DESC,
+              warningOnly: false,
+              editors: {
+                domainUsersCanEdit: false
+              }
+            }
+          }
+        });
+      }
+    } else {
+      existingLocks.forEach((pr) => {
+        requests.push({
+          deleteProtectedRange: {
+            protectedRangeId: pr.protectedRangeId
+          }
+        });
+      });
+    }
+  });
+
+  if (requests.length === 0) return;
+
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
+    spreadsheetId
+  )}:batchUpdate`;
+
+  await sheetsFetch(url, {
+    method: 'POST',
+    body: JSON.stringify({ requests })
+  }).catch(() => {
+    // Best-effort sheet lock so permission edge cases never fail data sync
+  });
 }
 
 /**
@@ -968,6 +1037,7 @@ export async function syncAllDataToSpreadsheet(
   }
 
   let manualSjCount = 0;
+  let manualMetaForLock: SpreadsheetMetadata | null = null;
   if (opts.syncManualSjTab !== false) {
     const manualRows = buildManualSuratJalanSheetRows(opts.suratJalanHistory);
     manualSjCount = manualRows.length - 1;
@@ -977,6 +1047,7 @@ export async function syncAllDataToSpreadsheet(
       manualMeta = await ensureTabsExist(manualTargetId, manualMeta, [
         SURAT_JALAN_MANUAL_TAB_TITLE
       ]);
+      manualMetaForLock = manualMeta;
       const manualSheetId = manualMeta.sheets.find(
         (s) => s.title === SURAT_JALAN_MANUAL_TAB_TITLE
       )?.sheetId;
@@ -1005,6 +1076,17 @@ export async function syncAllDataToSpreadsheet(
       REKAP_STOK_TAB_TITLE,
       tabIdMap.get(REKAP_STOK_TAB_TITLE),
       rekapRows
+    );
+  }
+
+  const shouldLock = opts.lockSheetReadOnly !== false;
+  await applySheetProtectionsViaApi(spreadsheetId, meta, requiredTabs, shouldLock);
+  if (useSeparateManualFile && manualMetaForLock) {
+    await applySheetProtectionsViaApi(
+      manualTargetId,
+      manualMetaForLock,
+      [SURAT_JALAN_MANUAL_TAB_TITLE],
+      shouldLock
     );
   }
 
@@ -1045,17 +1127,18 @@ export function isValidAppsScriptUrl(url: string): boolean {
 export function generateAppsScriptCode(secretToken: string): string {
   const safeSecret = (secretToken || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
   return `// ============================================================================
-// PALLETTRACK SJA <-> GOOGLE SHEETS "Data GBJ (new)" BRIDGE v3 (AUTO-SYNC 24/7)
+// PALLETTRACK SJA <-> GOOGLE SHEETS "Data GBJ (new)" BRIDGE v4 (AUTO-SYNC + READ-ONLY LOCK)
 // Cara Pasang / Update: Ekstensi -> Apps Script -> Tempel kode ini -> Simpan
 // Deployment: Terapkan -> Kelola deployment -> Edit -> Versi baru -> Terapkan
 // ============================================================================
 
-var BRIDGE_VERSION = 3;
+var BRIDGE_VERSION = 4;
 var SECRET_TOKEN = '${safeSecret}';
 var TAB_DATA_GBJ = '${DEFAULT_PALLET_TAB_TITLE}';
 var TAB_SURAT_JALAN = '${SURAT_JALAN_TAB_TITLE}';
 var TAB_SURAT_JALAN_MANUAL = '${SURAT_JALAN_MANUAL_TAB_TITLE}';
 var TAB_REKAP_STOK = '${REKAP_STOK_TAB_TITLE}';
+var READ_ONLY_LOCK_DESC = '${READ_ONLY_LOCK_DESC}';
 
 function doGet(e) {
   var params = (e && e.parameter) || {};
@@ -1122,14 +1205,17 @@ function handleBridgeRequest(req) {
       var lock = LockService.getScriptLock();
       lock.waitLock(25000);
       try {
+        var shouldLock = req.lockSheetReadOnly !== false;
         var palletSheet = getTargetPalletSheet(ss, req.palletTabTitle);
         var palletRows = req.palletRows || [];
         writeFormattedRows(palletSheet, palletRows);
+        applySheetLock(palletSheet, shouldLock);
 
         var sjCount = 0;
         if (req.includeSuratJalanTab && req.suratJalanRows && req.suratJalanRows.length > 0) {
           var sjSheet = getOrCreateSheet(ss, TAB_SURAT_JALAN);
           writeFormattedRows(sjSheet, req.suratJalanRows);
+          applySheetLock(sjSheet, shouldLock);
           sjCount = Math.max(0, req.suratJalanRows.length - 1);
         }
 
@@ -1141,6 +1227,7 @@ function handleBridgeRequest(req) {
             : ss;
           var manualSjSheet = getOrCreateSheet(manualTargetSs, TAB_SURAT_JALAN_MANUAL);
           writeFormattedRows(manualSjSheet, req.manualSuratJalanRows);
+          applySheetLock(manualSjSheet, shouldLock);
           manualSjCount = Math.max(0, req.manualSuratJalanRows.length - 1);
         }
 
@@ -1148,6 +1235,7 @@ function handleBridgeRequest(req) {
         if (req.includeRekapTab && req.rekapRows && req.rekapRows.length > 0) {
           var rekapSheet = getOrCreateSheet(ss, TAB_REKAP_STOK);
           writeFormattedRows(rekapSheet, req.rekapRows);
+          applySheetLock(rekapSheet, shouldLock);
           rekapCount = Math.max(0, req.rekapRows.length - 1);
         }
 
@@ -1197,6 +1285,48 @@ function getTargetPalletSheet(ss, preferredTitle) {
 
 function getOrCreateSheet(ss, title) {
   return ss.getSheetByName(title) || ss.insertSheet(title);
+}
+
+function applySheetLock(sheet, shouldLock) {
+  if (!sheet) return;
+  try {
+    var protections = sheet.getProtections(SpreadsheetApp.ProtectionType.SHEET);
+    var existingLocks = [];
+    for (var i = 0; i < protections.length; i++) {
+      if (protections[i].getDescription() === READ_ONLY_LOCK_DESC) {
+        existingLocks.push(protections[i]);
+      }
+    }
+
+    if (shouldLock) {
+      if (existingLocks.length === 0) {
+        var p = sheet.protect().setDescription(READ_ONLY_LOCK_DESC);
+        p.setWarningOnly(false);
+        var me = Session.getEffectiveUser();
+        var meEmail = me ? String(me.getEmail() || '').toLowerCase() : '';
+        var editors = p.getEditors();
+        var toRemove = [];
+        for (var j = 0; j < editors.length; j++) {
+          var edEmail = String(editors[j].getEmail() || '').toLowerCase();
+          if (edEmail && edEmail !== meEmail) {
+            toRemove.push(editors[j]);
+          }
+        }
+        if (toRemove.length > 0) {
+          p.removeEditors(toRemove);
+        }
+        if (p.canDomainEdit()) {
+          p.setDomainEdit(false);
+        }
+      }
+    } else {
+      for (var k = 0; k < existingLocks.length; k++) {
+        existingLocks[k].remove();
+      }
+    }
+  } catch (lockErr) {
+    // Proteksi sheet bersifat opsional agar tidak menggagalkan sinkronisasi data
+  }
 }
 
 function writeFormattedRows(sheet, rows) {
@@ -1356,6 +1486,7 @@ export async function syncAllDataViaAppsScript(
       includeManualSjTab: includeManualSj,
       manualSjSpreadsheetId: manualTargetId,
       includeRekapTab: includeRekap,
+      lockSheetReadOnly: opts.lockSheetReadOnly !== false,
       palletRows,
       suratJalanRows: sjRows,
       manualSuratJalanRows: manualSjRows,

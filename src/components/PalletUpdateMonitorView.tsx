@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { PalletRecord, MasterWarehouse } from '../types/warehouse';
+import { PalletRecord, MasterWarehouse, SuratJalanRecord } from '../types/warehouse';
 import { getPalletBatches } from '../utils/batchCalculator';
 import { exportPalletsToCsv } from '../utils/exporter';
 import {
@@ -11,11 +11,14 @@ import {
   Clock,
   RefreshCw,
   ArrowUpDown,
-  PackageCheck
+  PackageCheck,
+  FileText,
+  Truck
 } from 'lucide-react';
 
 interface PalletUpdateMonitorViewProps {
   records: PalletRecord[];
+  suratJalanHistory?: SuratJalanRecord[];
   activeWarehouse?: MasterWarehouse | null;
   onOpenHistory?: () => void;
 }
@@ -86,6 +89,7 @@ function getEffectiveUpdateIso(record: PalletRecord): string | null {
 
 export const PalletUpdateMonitorView: React.FC<PalletUpdateMonitorViewProps> = ({
   records,
+  suratJalanHistory = [],
   activeWarehouse
 }) => {
   const todayKey = useMemo(() => toLocalDateKey(new Date()), []);
@@ -112,7 +116,7 @@ export const PalletUpdateMonitorView: React.FC<PalletUpdateMonitorViewProps> = (
     });
   }, [records, onlyCurrentWarehouse, activeWarehouse]);
 
-  // Hitung tanggal-tanggal terbaru yang memiliki update pallet agar cepat dipilih petugas
+  // Hitung tanggal-tanggal terbaru yang memiliki update pallet atau surat jalan agar cepat dipilih petugas
   const recentUpdateDates = useMemo(() => {
     const counts = new Map<string, number>();
     scopedRecords.forEach((r) => {
@@ -123,10 +127,18 @@ export const PalletUpdateMonitorView: React.FC<PalletUpdateMonitorViewProps> = (
         counts.set(key, (counts.get(key) || 0) + 1);
       }
     });
+    suratJalanHistory.forEach((sj) => {
+      const updIso = sj.updatedAt || sj.createdAt;
+      if (!updIso) return;
+      const key = toLocalDateKey(updIso);
+      if (key) {
+        counts.set(key, (counts.get(key) || 0) + 1);
+      }
+    });
     return Array.from(counts.entries())
       .sort((a, b) => b[0].localeCompare(a[0]))
       .slice(0, 6);
-  }, [scopedRecords]);
+  }, [scopedRecords, suratJalanHistory]);
 
   // Records yang diupdate vs diinput pada tanggal terpilih
   const datePartition = useMemo(() => {
@@ -160,6 +172,34 @@ export const PalletUpdateMonitorView: React.FC<PalletUpdateMonitorViewProps> = (
     return { updatedOnDate, createdOnDate, allOnDate };
   }, [scopedRecords, selectedDate]);
 
+  // Surat Jalan yang dibuat / diupdate pada tanggal terpilih
+  const sjOnSelectedDate = useMemo(() => {
+    const q = searchTerm.toLowerCase().trim();
+    return suratJalanHistory
+      .filter((sj) => {
+        const effIso = sj.updatedAt || sj.createdAt;
+        const dateKey = toLocalDateKey(effIso);
+        if (dateKey !== selectedDate) return false;
+        if (!q) return true;
+        return (
+          (sj.noSuratJalan || '').toLowerCase().includes(q) ||
+          (sj.noPolisi || '').toLowerCase().includes(q) ||
+          (sj.ruteTujuanKode || '').toLowerCase().includes(q) ||
+          (sj.ruteTujuanNama || '').toLowerCase().includes(q) ||
+          (sj.namaVendorArmada || '').toLowerCase().includes(q) ||
+          (sj.namaDriver || '').toLowerCase().includes(q) ||
+          (sj.noSpp || '').toLowerCase().includes(q) ||
+          (sj.noPo || '').toLowerCase().includes(q) ||
+          (sj.lastUpdateAction || '').toLowerCase().includes(q)
+        );
+      })
+      .sort((a, b) => {
+        const tA = new Date(a.updatedAt || a.createdAt || 0).getTime();
+        const tB = new Date(b.updatedAt || b.createdAt || 0).getTime();
+        return tB - tA;
+      });
+  }, [suratJalanHistory, selectedDate, searchTerm]);
+
   const modeRecords = useMemo(() => {
     const base =
       activityMode === 'updated'
@@ -181,7 +221,8 @@ export const PalletUpdateMonitorView: React.FC<PalletUpdateMonitorViewProps> = (
           (item.lokasiBin || '').toLowerCase().includes(q) ||
           (item.noBatch || '').toLowerCase().includes(q) ||
           (item.lastUpdateAction || '').toLowerCase().includes(q) ||
-          (item.keterangan || '').toLowerCase().includes(q)
+          (item.keterangan || '').toLowerCase().includes(q) ||
+          (item.noSuratJalan || '').toLowerCase().includes(q)
         );
       })
       .sort((a, b) => {
@@ -191,7 +232,7 @@ export const PalletUpdateMonitorView: React.FC<PalletUpdateMonitorViewProps> = (
       });
   }, [datePartition, activityMode, statusFilter, searchTerm]);
 
-  // Statistik utama berdasar tanggal terpilih (fokus pada pallet yang diupdate tanggal tersebut)
+  // Statistik utama berdasar tanggal terpilih
   const kpiStats = useMemo(() => {
     const updatedList = datePartition.updatedOnDate;
     const totalBoxUpdated = updatedList.reduce(
@@ -202,15 +243,11 @@ export const PalletUpdateMonitorView: React.FC<PalletUpdateMonitorViewProps> = (
       updatedList.map((r) => (r.lokasiBin || '').toUpperCase()).filter(Boolean)
     ).size;
 
-    const editCount = updatedList.filter((r) => {
+    const statusChangeCount = updatedList.filter((r) => {
       const act = (r.lastUpdateAction || '').toLowerCase();
-      return (
-        !act.includes('outbound') &&
-        !act.includes('kembalikan') &&
-        r.status !== 'OUT'
-      );
+      return act.includes('outbound') || act.includes('kembalikan');
     }).length;
-    const statusChangeCount = updatedList.length - editCount;
+    const editCount = updatedList.length - statusChangeCount;
 
     return {
       updatedCount: updatedList.length,
@@ -230,10 +267,10 @@ export const PalletUpdateMonitorView: React.FC<PalletUpdateMonitorViewProps> = (
           <div>
             <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
               <CalendarClock className="w-5 h-5 text-blue-600 dark:text-blue-400" />
-              <span>Monitoring Update Pallet Harian</span>
+              <span>Monitoring Update Data Harian</span>
             </h2>
             <p className="text-xs text-slate-500 mt-0.5">
-              Pantau jumlah dan daftar pallet yang mengalami pembaruan data, perubahan urutan Bin, maupun pengambilan pada tanggal tertentu.
+              Pantau seluruh data pallet maupun Surat Jalan yang mengalami perubahan, edit data, oper gudang, urutan Bin, maupun pengambilan pada tanggal yang dipilih.
             </p>
           </div>
 
@@ -295,7 +332,7 @@ export const PalletUpdateMonitorView: React.FC<PalletUpdateMonitorViewProps> = (
         {/* Riwayat Tanggal yang Ada Aktivitas Update */}
         {recentUpdateDates.length > 0 && (
           <div className="pt-3 border-t border-slate-100 dark:border-slate-800 flex flex-wrap items-center gap-2 text-xs">
-            <span className="text-slate-500 font-medium">Tanggal dengan riwayat update:</span>
+            <span className="text-slate-500 font-medium">Tanggal dengan riwayat aktivitas:</span>
             {recentUpdateDates.map(([dateKey, count]) => (
               <button
                 key={dateKey}
@@ -350,16 +387,19 @@ export const PalletUpdateMonitorView: React.FC<PalletUpdateMonitorViewProps> = (
 
         <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-4 shadow-xs">
           <div className="text-[11px] font-bold uppercase text-slate-500">
-            Input Baru ({formatShortDate(selectedDate)})
+            Input Baru / Surat Jalan
           </div>
           <div className="text-2xl font-black font-mono tabular-nums text-slate-700 dark:text-slate-300 mt-1">
             {kpiStats.createdCount}{' '}
             <span className="text-xs font-normal text-slate-500">Pallet</span>
+            <span className="text-xs font-normal text-slate-400 mx-1.5">·</span>
+            <span className="text-blue-600 dark:text-blue-400">{sjOnSelectedDate.length}</span>{' '}
+            <span className="text-xs font-normal text-slate-500">SJ</span>
           </div>
         </div>
       </div>
 
-      {/* Main Monitoring Table Card */}
+      {/* Main Monitoring Table Card: Pallet */}
       <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">
         {/* Toolbar */}
         <div className="p-4 sm:p-5 border-b border-slate-200 dark:border-slate-800 flex flex-col md:flex-row md:items-center justify-between gap-3">
@@ -372,7 +412,7 @@ export const PalletUpdateMonitorView: React.FC<PalletUpdateMonitorViewProps> = (
                 Menampilkan <strong>{modeRecords.length}</strong> pallet
               </span>
               <span aria-hidden="true">·</span>
-              <span>Edit Data/Bin: {kpiStats.editCount}</span>
+              <span>Edit Data/Bin/SJ: {kpiStats.editCount}</span>
               <span aria-hidden="true">·</span>
               <span>Outbound/Status: {kpiStats.statusChangeCount}</span>
             </div>
@@ -423,7 +463,7 @@ export const PalletUpdateMonitorView: React.FC<PalletUpdateMonitorViewProps> = (
                 type="text"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                placeholder="Cari pallet, bin, aksi..."
+                placeholder="Cari pallet, bin, SJ, aksi..."
                 className="text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg pl-8 pr-3 py-2 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 w-48 sm:w-56"
               />
             </div>
@@ -475,7 +515,7 @@ export const PalletUpdateMonitorView: React.FC<PalletUpdateMonitorViewProps> = (
               pada {formatDateReadable(selectedDate)}
             </h3>
             <p className="text-xs text-slate-500 mt-1 max-w-md mx-auto">
-              Setiap perubahan data pallet (edit jumlah box, pindah Bin, perubahan batch, urutan Bin, outbound, atau penyelesaian Tasklist Pallet Problem) akan tercatat otomatis di sini beserta tanggal dan jam updatenya.
+              Setiap perubahan data pallet (edit jumlah box, status QC, pindah Bin, oper gudang, perubahan batch, urutan Bin, outbound, Surat Jalan, atau penyelesaian Tasklist Pallet Problem) akan tercatat otomatis di sini beserta tanggal dan jam updatenya.
             </p>
           </div>
         ) : (
@@ -604,6 +644,107 @@ export const PalletUpdateMonitorView: React.FC<PalletUpdateMonitorViewProps> = (
           </div>
         )}
       </div>
+
+      {/* Aktivitas Surat Jalan (Pembuatan / Edit / Update SPP & PO) pada Tanggal Terpilih */}
+      {sjOnSelectedDate.length > 0 && (
+        <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">
+          <div className="p-4 sm:p-5 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <div className="p-2 rounded-lg bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400">
+                <FileText className="w-4 h-4" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                  Aktivitas Surat Jalan ({formatShortDate(selectedDate)})
+                </h3>
+                <p className="text-xs text-slate-500">
+                  Pembuatan baru, edit data, maupun pembaruan No. SPP / No. PO Surat Jalan pada tanggal ini
+                </p>
+              </div>
+            </div>
+            <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-blue-100 dark:bg-blue-950 text-blue-700 dark:text-blue-300">
+              {sjOnSelectedDate.length} Surat Jalan
+            </span>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse text-xs">
+              <thead className="bg-slate-50 dark:bg-slate-800/80 border-b border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 font-bold uppercase text-[11px]">
+                <tr>
+                  <th className="py-2.5 px-3 text-center w-10">No</th>
+                  <th className="py-2.5 px-3">Waktu Update</th>
+                  <th className="py-2.5 px-3">Aktivitas</th>
+                  <th className="py-2.5 px-3">No. Surat Jalan</th>
+                  <th className="py-2.5 px-3">No. SPP &amp; PO</th>
+                  <th className="py-2.5 px-3">Rute Tujuan</th>
+                  <th className="py-2.5 px-3">Nopol &amp; Driver</th>
+                  <th className="py-2.5 px-3 text-right">Muatan</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                {sjOnSelectedDate.map((sj, idx) => {
+                  const effIso = sj.updatedAt || sj.createdAt;
+                  const isManual = !sj.palletIds || sj.palletIds.length === 0;
+                  const actLabel =
+                    sj.lastUpdateAction ||
+                    (isManual ? 'Surat Jalan Manual' : 'Buat Surat Jalan');
+                  return (
+                    <tr
+                      key={sj.id}
+                      className="hover:bg-blue-50/40 dark:hover:bg-blue-950/20 transition-colors"
+                    >
+                      <td className="py-2.5 px-3 text-center font-mono font-bold text-slate-400">
+                        {idx + 1}
+                      </td>
+                      <td className="py-2.5 px-3 whitespace-nowrap font-mono font-bold text-slate-900 dark:text-white tabular-nums">
+                        <div className="flex items-center gap-1.5">
+                          <Clock className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400 shrink-0" />
+                          <span>{formatTimeOnly(effIso)}</span>
+                        </div>
+                      </td>
+                      <td className="py-2.5 px-3 font-semibold text-slate-800 dark:text-slate-200">
+                        {actLabel}
+                      </td>
+                      <td className="py-2.5 px-3 font-mono font-bold text-blue-600 dark:text-blue-400 whitespace-nowrap">
+                        {sj.noSuratJalan}
+                        {isManual && (
+                          <span className="ml-1.5 px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-300 text-[10px] font-sans">
+                            Manual
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-2.5 px-3 font-mono text-[11px] text-slate-600 dark:text-slate-300">
+                        <div>SPP: {sj.noSpp && sj.noSpp !== '-' ? sj.noSpp : '-'}</div>
+                        <div>PO: {sj.noPo && sj.noPo !== '-' ? sj.noPo : '-'}</div>
+                      </td>
+                      <td className="py-2.5 px-3 font-semibold text-slate-800 dark:text-slate-200">
+                        {sj.ruteTujuanKode || sj.ruteTujuanNama}
+                      </td>
+                      <td className="py-2.5 px-3">
+                        <div className="inline-flex items-center gap-1 font-mono font-bold text-slate-900 dark:text-white">
+                          <Truck className="w-3 h-3 text-slate-400" />
+                          <span>{sj.noPolisi}</span>
+                        </div>
+                        <div className="text-[11px] text-slate-500">
+                          {sj.namaDriver || '-'} · {sj.namaVendorArmada}
+                        </div>
+                      </td>
+                      <td className="py-2.5 px-3 text-right font-mono tabular-nums whitespace-nowrap">
+                        <div className="font-bold text-slate-900 dark:text-white">
+                          {sj.grandTotalBox} Box
+                        </div>
+                        <div className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400">
+                          {sj.grandTotalKg.toLocaleString('id-ID')} Kg
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

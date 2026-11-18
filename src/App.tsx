@@ -93,6 +93,7 @@ import {
   subscribeToSuratJalanRecords,
   saveSuratJalanRecord,
   updateSuratJalanRecord,
+  deleteSuratJalanRecord,
   SheetsSyncMode,
   SheetsBridgeConfig,
   subscribeToSheetsBridgeConfig,
@@ -323,6 +324,12 @@ function loadSavedWarehouseUsers(): WarehouseUser[] {
   return DEFAULT_WAREHOUSE_USERS.filter((u) => !deleted.has(u.id));
 }
 
+const PURGED_SURAT_JALAN_IDS = new Set([
+  'sj-1794549474809-0-d69p',
+  'sj-1794549475032-1-vr2n',
+  'sj-1794804651402-0-9y26'
+]);
+
 function loadSavedSuratJalan(): SuratJalanRecord[] {
   try {
     for (const key of SURAT_STORAGE_KEYS) {
@@ -330,7 +337,13 @@ function loadSavedSuratJalan(): SuratJalanRecord[] {
       if (stored) {
         const parsed = JSON.parse(stored);
         if (Array.isArray(parsed)) {
-          return parsed;
+          const cleaned = parsed.filter(
+            (sj) => sj && !PURGED_SURAT_JALAN_IDS.has(sj.id)
+          );
+          if (cleaned.length !== parsed.length) {
+            localStorage.setItem(key, JSON.stringify(cleaned));
+          }
+          return cleaned;
         }
       }
     }
@@ -479,6 +492,7 @@ export default function App() {
     }
   });
   const [includeRekapTab, setIncludeRekapTab] = useState<boolean>(true);
+  const [lockSheetReadOnly, setLockSheetReadOnly] = useState<boolean>(true);
   const [autoSyncEnabled, setAutoSyncEnabled] = useState<boolean>(false);
   const [isSheetsBannerDismissed, setIsSheetsBannerDismissed] = useState<boolean>(false);
   const [isSyncingSheets, setIsSyncingSheets] = useState<boolean>(false);
@@ -615,6 +629,9 @@ export default function App() {
       }
       if (cfg.includeRekapTab !== undefined) {
         setIncludeRekapTab(cfg.includeRekapTab);
+      }
+      if (cfg.lockSheetReadOnly !== undefined) {
+        setLockSheetReadOnly(cfg.lockSheetReadOnly);
       }
       setIsBridgeSavedInCloud(Boolean(cfg.appsScriptUrl && isValidAppsScriptUrl(cfg.appsScriptUrl)));
       setCloudBridgeLastSyncedAt(cfg.lastSyncedAt || null);
@@ -775,6 +792,7 @@ export default function App() {
           overrides.manualSjSpreadsheetUrl ?? manualSjSpreadsheetInput
         ).trim(),
         includeRekapTab: overrides.includeRekapTab ?? includeRekapTab,
+        lockSheetReadOnly: overrides.lockSheetReadOnly ?? lockSheetReadOnly,
         autoSync24x7Enabled: overrides.autoSync24x7Enabled ?? autoSyncEnabled,
         lastSyncedAt: overrides.lastSyncedAt ?? cloudBridgeLastSyncedAt ?? undefined,
         updatedAt: new Date().toISOString()
@@ -792,6 +810,7 @@ export default function App() {
       includeManualSjTab,
       manualSjSpreadsheetInput,
       includeRekapTab,
+      lockSheetReadOnly,
       autoSyncEnabled,
       cloudBridgeLastSyncedAt
     ]
@@ -819,7 +838,8 @@ export default function App() {
                 syncSuratJalanTab: includeSuratJalanTab,
                 syncManualSjTab: includeManualSjTab,
                 manualSjSpreadsheetId: manualTargetId,
-                syncRekapTab: includeRekapTab
+                syncRekapTab: includeRekapTab,
+                lockSheetReadOnly
               })
             : await syncAllDataToSpreadsheet({
                 spreadsheetId: extractSpreadsheetId(spreadsheetInput),
@@ -831,7 +851,8 @@ export default function App() {
                 syncSuratJalanTab: includeSuratJalanTab,
                 syncManualSjTab: includeManualSjTab,
                 manualSjSpreadsheetId: manualTargetId,
-                syncRekapTab: includeRekapTab
+                syncRekapTab: includeRekapTab,
+                lockSheetReadOnly
               });
         setLastSyncResult(result);
         setCloudBridgeLastSyncedAt(result.syncedAt);
@@ -884,6 +905,7 @@ export default function App() {
       includeManualSjTab,
       manualSjSpreadsheetInput,
       includeRekapTab,
+      lockSheetReadOnly,
       computeDataDigest,
       appendSyncLog
     ]
@@ -1146,43 +1168,100 @@ export default function App() {
   const handleSaveSuratJalan = async (newSurat: SuratJalanRecord) => {
     const isExisting = suratJalanHistory.some((s) => s.id === newSurat.id);
     const nowIso = new Date().toISOString();
+    const stampedSurat: SuratJalanRecord = {
+      ...newSurat,
+      updatedAt: nowIso,
+      lastUpdateAction:
+        newSurat.lastUpdateAction ||
+        (isExisting
+          ? `Edit Surat Jalan (${newSurat.noSuratJalan})`
+          : !newSurat.palletIds || newSurat.palletIds.length === 0
+          ? `Buat Surat Jalan Manual (${newSurat.noSuratJalan})`
+          : `Buat Surat Jalan (${newSurat.noSuratJalan})`)
+    };
+
+    const linkedSet = new Set(stampedSurat.palletIds || []);
+    const palletsToPersist: PalletRecord[] = [];
+    records.forEach((r) => {
+      if (linkedSet.has(r.id)) {
+        palletsToPersist.push({
+          ...r,
+          suratJalanId: stampedSurat.id,
+          noSuratJalan: stampedSurat.noSuratJalan,
+          updatedAt: nowIso,
+          lastUpdateAction:
+            stampedSurat.lastUpdateAction || `Surat Jalan ${stampedSurat.noSuratJalan}`
+        });
+      } else if (isExisting && r.suratJalanId === stampedSurat.id && !linkedSet.has(r.id)) {
+        const cleaned: PalletRecord = {
+          ...r,
+          updatedAt: nowIso,
+          lastUpdateAction: `Lepas dari SJ ${stampedSurat.noSuratJalan}`
+        };
+        delete cleaned.suratJalanId;
+        delete cleaned.noSuratJalan;
+        palletsToPersist.push(cleaned);
+      }
+    });
+    const persistedMap = new Map(palletsToPersist.map((p) => [p.id, p]));
 
     if (isExisting) {
       setSuratJalanHistory((prev) =>
-        prev.map((s) => (s.id === newSurat.id ? newSurat : s))
+        prev.map((s) => (s.id === stampedSurat.id ? stampedSurat : s))
       );
       setRecords((prev) =>
-        prev.map((r) => {
-          if (r.suratJalanId === newSurat.id || newSurat.palletIds.includes(r.id)) {
-            return {
-              ...r,
-              suratJalanId: newSurat.id,
-              noSuratJalan: newSurat.noSuratJalan,
-              updatedAt: nowIso,
-              lastUpdateAction: `Surat Jalan ${newSurat.noSuratJalan}`
-            };
-          }
-          return r;
-        })
+        prev.map((r) => persistedMap.get(r.id) || r)
       );
-      await updateSuratJalanRecord(newSurat);
+      await updateSuratJalanRecord(stampedSurat);
     } else {
-      setSuratJalanHistory((prev) => [newSurat, ...prev]);
+      setSuratJalanHistory((prev) => [stampedSurat, ...prev]);
       setRecords((prev) =>
-        prev.map((r) => {
-          if (newSurat.palletIds.includes(r.id)) {
-            return {
-              ...r,
-              suratJalanId: newSurat.id,
-              noSuratJalan: newSurat.noSuratJalan,
-              updatedAt: nowIso,
-              lastUpdateAction: `Surat Jalan ${newSurat.noSuratJalan}`
-            };
-          }
-          return r;
+        prev.map((r) => persistedMap.get(r.id) || r)
+      );
+      await saveSuratJalanRecord(stampedSurat);
+    }
+
+    if (palletsToPersist.length > 0) {
+      await Promise.all(
+        palletsToPersist.map((p) => updatePalletRecord(p).catch(() => undefined))
+      );
+    }
+
+    setLocalMutationVersion((v) => v + 1);
+  };
+
+  const handleDeleteSuratJalan = async (sj: SuratJalanRecord) => {
+    const nowIso = new Date().toISOString();
+    setSuratJalanHistory((prev) => prev.filter((s) => s.id !== sj.id));
+
+    const affectedPalletIds = new Set<string>();
+    setRecords((prev) =>
+      prev.map((r) => {
+        if (r.suratJalanId === sj.id || (sj.palletIds || []).includes(r.id)) {
+          affectedPalletIds.add(r.id);
+          return {
+            ...r,
+            suratJalanId: undefined,
+            noSuratJalan: undefined,
+            updatedAt: nowIso,
+            lastUpdateAction: `Hapus Surat Jalan ${sj.noSuratJalan}`
+          };
+        }
+        return r;
+      })
+    );
+
+    await deleteSuratJalanRecord(sj.id);
+    if (affectedPalletIds.size > 0) {
+      const affectedList = records.filter((r) => affectedPalletIds.has(r.id));
+      await Promise.all(
+        affectedList.map((r) => {
+          const cleaned = { ...r, updatedAt: nowIso, lastUpdateAction: `Hapus SJ ${sj.noSuratJalan}` };
+          delete cleaned.suratJalanId;
+          delete cleaned.noSuratJalan;
+          return updatePalletRecord(cleaned).catch(() => undefined);
         })
       );
-      await saveSuratJalanRecord(newSurat);
     }
     setLocalMutationVersion((v) => v + 1);
   };
@@ -1298,7 +1377,7 @@ export default function App() {
   const handleUpdateRecord = async (updatedRecord: PalletRecord) => {
     const stampedRecord: PalletRecord = {
       ...updatedRecord,
-      updatedAt: updatedRecord.updatedAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
       lastUpdateAction: updatedRecord.lastUpdateAction || 'Edit Data Pallet'
     };
 
@@ -1504,8 +1583,7 @@ export default function App() {
     const todayY = now.getFullYear();
     const todayM = now.getMonth();
     const todayD = now.getDate();
-    return records.filter((r) => {
-      const iso = r.updatedAt || r.tanggalPengambilan;
+    const isToday = (iso?: string | null) => {
       if (!iso) return false;
       const d = new Date(iso);
       return (
@@ -1514,7 +1592,10 @@ export default function App() {
         d.getMonth() === todayM &&
         d.getDate() === todayD
       );
-    }).length;
+    };
+    const palletCount = records.filter((r) => isToday(r.updatedAt || r.tanggalPengambilan)).length;
+    const sjCount = suratJalanHistory.filter((sj) => isToday(sj.updatedAt)).length;
+    return palletCount + sjCount;
   })();
 
   const openMasterModal = (tab: MasterModalTabKey = 'tujuan_tarif') => {
@@ -1554,6 +1635,7 @@ export default function App() {
       warehouseUsers={warehouseUsers}
       onAddWarehouseUser={handleAddWarehouseUser}
       onDeleteWarehouseUser={handleDeleteWarehouseUser}
+      suratJalanHistory={suratJalanHistory}
     />
   );
 
@@ -1627,6 +1709,15 @@ export default function App() {
             setActiveWarehouseId(wh.id);
             setPortalLocationGroup(wh.locationGroup);
             setActiveTab('bin_map');
+          }}
+          onOpenSuratJalan={() => {
+            const defaultWh =
+              masterWarehouses.find((w) => w.status === 'ACTIVE') || masterWarehouses[0];
+            if (defaultWh) {
+              setPortalLocationGroup(defaultWh.locationGroup);
+              setActiveWarehouseId(defaultWh.id);
+              setActiveTab('surat_jalan');
+            }
           }}
           onOpenWarehouseManagement={() => openMasterModal('gudang')}
           records={records}
@@ -2320,6 +2411,7 @@ export default function App() {
           {activeTab === 'update_monitor' && (
             <PalletUpdateMonitorView
               records={records}
+              suratJalanHistory={suratJalanHistory}
               activeWarehouse={activeWarehouse}
               onOpenHistory={() => setActiveTab('history')}
             />
@@ -2333,7 +2425,9 @@ export default function App() {
               masterVendors={masterVendors}
               masterTariffs={masterTariffs}
               suratJalanHistory={suratJalanHistory}
+              blacklistRecords={blacklistRecords}
               onSaveSuratJalan={handleSaveSuratJalan}
+              onDeleteSuratJalan={handleDeleteSuratJalan}
             />
           )}
 
@@ -2373,6 +2467,13 @@ export default function App() {
               onChangeManualSjSpreadsheetInput={setManualSjSpreadsheetInput}
               includeRekapTab={includeRekapTab}
               onChangeIncludeRekapTab={setIncludeRekapTab}
+              lockSheetReadOnly={lockSheetReadOnly}
+              onChangeLockSheetReadOnly={(val) => {
+                setLockSheetReadOnly(val);
+                if (isBridgeSavedInCloud && isValidAppsScriptUrl(appsScriptUrl)) {
+                  persistBridgeConfigToCloud({ lockSheetReadOnly: val }).catch(() => {});
+                }
+              }}
               autoSyncEnabled={autoSyncEnabled}
               onEnableAutoSync={handleEnableAutoSync}
               onDisableAutoSync={handleDisableAutoSync}

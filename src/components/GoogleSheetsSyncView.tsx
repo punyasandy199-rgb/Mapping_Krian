@@ -52,7 +52,8 @@ import {
   Code2,
   Users,
   Save,
-  KeyRound
+  KeyRound,
+  Lock
 } from 'lucide-react';
 
 export interface SyncActivityLogItem {
@@ -93,6 +94,8 @@ interface GoogleSheetsSyncViewProps {
   onChangeManualSjSpreadsheetInput: (val: string) => void;
   includeRekapTab: boolean;
   onChangeIncludeRekapTab: (val: boolean) => void;
+  lockSheetReadOnly: boolean;
+  onChangeLockSheetReadOnly: (val: boolean) => void;
   autoSyncEnabled: boolean;
   onEnableAutoSync: () => Promise<void>;
   onDisableAutoSync: () => Promise<void>;
@@ -140,6 +143,8 @@ export const GoogleSheetsSyncView: React.FC<GoogleSheetsSyncViewProps> = ({
   onChangeManualSjSpreadsheetInput,
   includeRekapTab,
   onChangeIncludeRekapTab,
+  lockSheetReadOnly,
+  onChangeLockSheetReadOnly,
   autoSyncEnabled,
   onEnableAutoSync,
   onDisableAutoSync,
@@ -189,11 +194,11 @@ export const GoogleSheetsSyncView: React.FC<GoogleSheetsSyncViewProps> = ({
   const isBridgeMode = syncMode === 'apps_script';
   const hasValidBridgeUrl = isValidAppsScriptUrl(appsScriptUrl);
   const isConnectionReady = isBridgeMode ? hasValidBridgeUrl : !needsAuth;
-  const needsBridgeV3Update =
+  const needsBridgeV4Update =
     isBridgeMode &&
     hasValidBridgeUrl &&
     metadata !== null &&
-    (metadata.bridgeVersion ?? 1) < 3;
+    (metadata.bridgeVersion ?? 1) < 4;
 
   const generatedAppsScript = generateAppsScriptCode(appsScriptSecret);
 
@@ -558,20 +563,20 @@ export const GoogleSheetsSyncView: React.FC<GoogleSheetsSyncViewProps> = ({
               )}
             </div>
 
-            {needsBridgeV3Update && (
+            {needsBridgeV4Update && (
               <div className="p-3.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-700 text-xs text-amber-950 dark:text-amber-200 space-y-1.5">
                 <div className="font-extrabold flex items-center gap-1.5 text-amber-800 dark:text-amber-300">
                   <AlertTriangle className="w-4 h-4 shrink-0" />
-                  <span>Pembaruan Apps Script Bridge (v3) Tersedia!</span>
+                  <span>Pembaruan Apps Script Bridge (v4) Tersedia!</span>
                 </div>
                 <p className="text-[11px] leading-relaxed">
                   Bridge Apps Script di spreadsheet Anda masih memakai versi lama (v
                   {metadata?.bridgeVersion ?? 1}). Klik{' '}
                   <strong>Salin Kode Apps Script</strong> di bawah, tempel ke editor Apps Script
                   lalu pilih <strong>Terapkan &rarr; Kelola deployment &rarr; Edit (ikon pensil)
-                  &rarr; Versi baru &rarr; Terapkan</strong> agar tab{' '}
-                  <strong>Sheet 1</strong> otomatis berubah nama menjadi{' '}
-                  <strong>{DEFAULT_PALLET_TAB_TITLE}</strong> saat sinkronisasi.
+                  &rarr; Versi baru &rarr; Terapkan</strong> untuk mengaktifkan{' '}
+                  <strong>Kunci Sheet Read-Only (Anti-Edit Manual)</strong> serta pembaruan tab{' '}
+                  <strong>{DEFAULT_PALLET_TAB_TITLE}</strong>.
                 </p>
               </div>
             )}
@@ -947,6 +952,40 @@ export const GoogleSheetsSyncView: React.FC<GoogleSheetsSyncViewProps> = ({
               </p>
             </div>
           )}
+
+          {/* Read-Only Sheet Lock Toggle */}
+          <div className="p-3.5 rounded-xl bg-emerald-50/70 dark:bg-emerald-950/25 border border-emerald-200 dark:border-emerald-900/70 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <label className="inline-flex items-start gap-2.5 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={lockSheetReadOnly}
+                onChange={(e) => onChangeLockSheetReadOnly(e.target.checked)}
+                className="mt-0.5 rounded border-emerald-400 text-emerald-600"
+              />
+              <span className="space-y-0.5">
+                <span className="flex items-center gap-1.5 font-bold text-emerald-950 dark:text-emerald-200">
+                  <Lock className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                  <span>Kunci Sheet Read-Only (Anti-Edit Manual di Spreadsheet)</span>
+                </span>
+                <span className="block text-[11px] text-emerald-900/80 dark:text-emerald-300/80 leading-relaxed">
+                  Mengunci otomatis tab <strong>{targetSheetDisplay}</strong>,{' '}
+                  <strong>{SURAT_JALAN_TAB_TITLE}</strong>,{' '}
+                  <strong>{SURAT_JALAN_MANUAL_TAB_TITLE}</strong>, dan{' '}
+                  <strong>{REKAP_STOK_TAB_TITLE}</strong> agar tim lain tidak bisa mengedit sel
+                  secara manual di Google Sheets—seluruh perubahan wajib lewat aplikasi PalletTrack.
+                </span>
+              </span>
+            </label>
+            <span
+              className={`px-2.5 py-1 rounded-lg text-[10px] font-extrabold whitespace-nowrap self-start sm:self-center ${
+                lockSheetReadOnly
+                  ? 'bg-emerald-600 text-white'
+                  : 'bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
+              }`}
+            >
+              {lockSheetReadOnly ? 'TERKUNCI VIEW-ONLY' : 'BEBAS EDIT'}
+            </span>
+          </div>
         </div>
       </div>
 
@@ -1298,38 +1337,74 @@ export const GoogleSheetsSyncView: React.FC<GoogleSheetsSyncViewProps> = ({
 
       {/* 4. PANDUAN & LOG AKTIVITAS */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
-        <div className="lg:col-span-7 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 space-y-4">
-          <div className="flex items-center gap-2 border-b border-slate-200 dark:border-slate-800 pb-3">
-            <BookOpen className="w-4 h-4 text-blue-600" />
-            <h3 className="text-sm font-extrabold text-slate-900 dark:text-white">
-              Cara Kerja Sinkronisasi Tanpa Terkunci Login Google (Cara B)
-            </h3>
+        <div className="lg:col-span-7 space-y-4">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 space-y-4">
+            <div className="flex items-center gap-2 border-b border-slate-200 dark:border-slate-800 pb-3">
+              <Lock className="w-4 h-4 text-emerald-600" />
+              <h3 className="text-sm font-extrabold text-slate-900 dark:text-white">
+                Cara Membuat Spreadsheet Hanya Bisa Dilihat (Edit Hanya Lewat Aplikasi)
+              </h3>
+            </div>
+
+            <ol className="space-y-2.5 text-xs text-slate-600 dark:text-slate-300 list-decimal pl-4 leading-relaxed">
+              <li>
+                <strong>Atur Bagikan (Share) Google Sheets ke &ldquo;Pelihat (Viewer)&rdquo;:</strong>{' '}
+                Buka file <em>&ldquo;{DEFAULT_SPREADSHEET_NAME}&rdquo;</em> &rarr; klik tombol{' '}
+                <strong>Bagikan (Share)</strong> di kanan atas &rarr; pada{' '}
+                <strong>Akses Umum</strong> dan semua email rekan/tim, ubah izinnya menjadi{' '}
+                <strong>Pelihat (Viewer)</strong> (jangan Editor). Biarkan hanya akun pemilik yang
+                menjadi <strong>Pemilik (Owner)</strong>.
+              </li>
+              <li>
+                <strong>Auto-Sync 24/7 Tetap Jalan Meski Orang Lain Viewer:</strong> Karena{' '}
+                <strong>Cara B (Apps Script Bridge)</strong> berjalan dengan{' '}
+                <em>&ldquo;Jalankan sebagai: Saya (Pemilik)&rdquo;</em>, operator tetap bisa input
+                pallet, edit stok, &amp; buat Surat Jalan dari aplikasi <strong>PalletTrack</strong>{' '}
+                dan data otomatis masuk ke Spreadsheet meski link Spreadsheet hanya berstatus{' '}
+                <strong>Viewer</strong>.
+              </li>
+              <li>
+                <strong>Proteksi Sheet Otomatis (v4):</strong> Centang opsi{' '}
+                <strong>Kunci Sheet Read-Only</strong> di atas dan pastikan Bridge Apps Script sudah
+                diperbarui ke <strong>v4</strong> agar semua tab hasil sinkronisasi otomatis dikunci
+                dari pengeditan manual.
+              </li>
+            </ol>
           </div>
 
-          <ol className="space-y-3 text-xs text-slate-600 dark:text-slate-300 list-decimal pl-4 leading-relaxed">
-            <li>
-              <strong>Operator Tidak Perlu Login Google:</strong> Semua halaman operasional (Input
-              Pallet, Scan QR Bin, Riwayat, Surat Jalan) terbuka bebas tanpa perlu login akun
-              Google.
-            </li>
-            <li>
-              <strong>Setup Pemilik 1x di &ldquo;{DEFAULT_SPREADSHEET_NAME}&rdquo;:</strong> Pasang
-              kode Bridge Apps Script di spreadsheet lalu deploy sebagai{' '}
-              <strong>Aplikasi web</strong> (<em>Jalankan sebagai: Saya</em>,{' '}
-              <em>Akses: Siapa saja</em>).
-            </li>
-            <li>
-              <strong>Simpan URL Web App ke Cloud:</strong> Klik{' '}
-              <strong>Tes &amp; Simpan ke Cloud</strong>. Alamat Bridge otomatis tersimpan di
-              database cloud dan aktif di semua HP/PC operator.
-            </li>
-            <li>
-              <strong>Aktifkan Auto-Sync 24/7:</strong> Sekali diaktifkan, setiap operator mana pun
-              menginput pallet, mengedit qty/keterangan, memproses outbound, atau menerbitkan Surat
-              Jalan, perubahan langsung masuk ke 3 tab lengkap di{' '}
-              <em>&ldquo;{DEFAULT_SPREADSHEET_NAME}&rdquo;</em> secara otomatis.
-            </li>
-          </ol>
+          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 space-y-4">
+            <div className="flex items-center gap-2 border-b border-slate-200 dark:border-slate-800 pb-3">
+              <BookOpen className="w-4 h-4 text-blue-600" />
+              <h3 className="text-sm font-extrabold text-slate-900 dark:text-white">
+                Cara Kerja Sinkronisasi Tanpa Terkunci Login Google (Cara B)
+              </h3>
+            </div>
+
+            <ol className="space-y-3 text-xs text-slate-600 dark:text-slate-300 list-decimal pl-4 leading-relaxed">
+              <li>
+                <strong>Operator Tidak Perlu Login Google:</strong> Semua halaman operasional (Input
+                Pallet, Scan QR Bin, Riwayat, Surat Jalan) terbuka bebas tanpa perlu login akun
+                Google.
+              </li>
+              <li>
+                <strong>Setup Pemilik 1x di &ldquo;{DEFAULT_SPREADSHEET_NAME}&rdquo;:</strong> Pasang
+                kode Bridge Apps Script di spreadsheet lalu deploy sebagai{' '}
+                <strong>Aplikasi web</strong> (<em>Jalankan sebagai: Saya</em>,{' '}
+                <em>Akses: Siapa saja</em>).
+              </li>
+              <li>
+                <strong>Simpan URL Web App ke Cloud:</strong> Klik{' '}
+                <strong>Tes &amp; Simpan ke Cloud</strong>. Alamat Bridge otomatis tersimpan di
+                database cloud dan aktif di semua HP/PC operator.
+              </li>
+              <li>
+                <strong>Aktifkan Auto-Sync 24/7:</strong> Sekali diaktifkan, setiap operator mana pun
+                menginput pallet, mengedit qty/keterangan, memproses outbound, atau menerbitkan Surat
+                Jalan, perubahan langsung masuk ke seluruh tab lengkap di{' '}
+                <em>&ldquo;{DEFAULT_SPREADSHEET_NAME}&rdquo;</em> secara otomatis.
+              </li>
+            </ol>
+          </div>
         </div>
 
         <div className="lg:col-span-5 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 space-y-3">
