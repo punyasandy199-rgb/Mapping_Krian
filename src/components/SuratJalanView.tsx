@@ -60,6 +60,33 @@ function normalizeNopol(nopol?: string): string {
   return (nopol || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 }
 
+/**
+ * Menyeragamkan format Nopol Kendaraan menjadi: [Huruf] [Angka] [Huruf]
+ * - Karakter pertama wajib huruf (angka di awal diabaikan)
+ * - Transisi huruf -> angka -> huruf otomatis diberi 1 spasi baik user mengetik pakai spasi maupun tanpa spasi
+ */
+function formatNopolPlate(raw?: string): string {
+  const clean = (raw || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  let g1 = '';
+  let g2 = '';
+  let g3 = '';
+  for (let i = 0; i < clean.length; i++) {
+    const ch = clean[i];
+    const isLetter = ch >= 'A' && ch <= 'Z';
+    const isDigit = ch >= '0' && ch <= '9';
+    if (g2.length === 0 && g3.length === 0) {
+      if (isLetter) g1 += ch;
+      else if (isDigit && g1.length > 0) g2 += ch;
+    } else if (g3.length === 0) {
+      if (isDigit) g2 += ch;
+      else if (isLetter) g3 += ch;
+    } else {
+      if (isLetter) g3 += ch;
+    }
+  }
+  return [g1, g2, g3].filter(Boolean).join(' ');
+}
+
 interface VehicleDriverHistoryVariant {
   namaDriver: string;
   noHpDriver: string;
@@ -337,18 +364,19 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
       const rawNopol = (sj.noPolisi || '').trim().toUpperCase();
       const norm = normalizeNopol(rawNopol);
       if (!norm) return;
+      const formattedNopol = formatNopolPlate(rawNopol) || rawNopol;
 
-      const driver = (sj.namaDriver || '').trim();
-      const hp = (sj.noHpDriver || '').trim();
-      const vendor = (sj.namaVendorArmada || '').trim();
+      const driver = (sj.namaDriver || '').trim().toUpperCase();
+      const hp = (sj.noHpDriver || '').trim().toUpperCase();
+      const vendor = (sj.namaVendorArmada || '').trim().toUpperCase();
       const tanggal = sj.tanggalPengambilanFormatted || sj.tanggal || '';
-      const tujuan = sj.ruteTujuanKode || sj.ruteTujuanNama || '-';
+      const tujuan = (sj.ruteTujuanKode || sj.ruteTujuanNama || '-').toUpperCase();
 
       let entry = map.get(norm);
       if (!entry) {
         entry = {
           normalizedNopol: norm,
-          displayNopol: rawNopol,
+          displayNopol: formattedNopol,
           latestDriver: driver,
           latestHp: hp,
           latestVendor: vendor,
@@ -360,9 +388,8 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
         };
         map.set(norm, entry);
       } else {
-        // Prefer nicely spaced version of nopol for display (e.g., "AB 8996 OE" over "AB8996OE")
-        if (!entry.displayNopol.includes(' ') && rawNopol.includes(' ')) {
-          entry.displayNopol = rawNopol;
+        if (!entry.displayNopol.includes(' ') && formattedNopol.includes(' ')) {
+          entry.displayNopol = formattedNopol;
         }
         if (!entry.latestDriver && driver) entry.latestDriver = driver;
         if (!entry.latestHp && hp) entry.latestHp = hp;
@@ -763,27 +790,28 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
     value: string
   ) => {
     setFormError(null);
+    const normalizedVal = field === 'noPolisi' ? formatNopolPlate(value) : value.toUpperCase();
     setArmadaEntries((prev) =>
-      prev.map((entry, i) => (i === idx ? { ...entry, [field]: value } : entry))
+      prev.map((entry, i) => (i === idx ? { ...entry, [field]: normalizedVal } : entry))
     );
     if (idx === 0 && field === 'noSuratJalan') {
       hasManualSjNoEditRef.current = true;
-      setNoSuratJalan(value);
+      setNoSuratJalan(normalizedVal);
     }
   };
 
   // Auto-fill namaDriver & noHpDriver ketika Nopol cocok dengan history kendaraan
   const handleNopolInputChange = (idx: number, rawVal: string) => {
     setFormError(null);
-    const upperVal = rawVal.toUpperCase();
-    const norm = normalizeNopol(upperVal);
+    const formattedNopol = formatNopolPlate(rawVal);
+    const norm = normalizeNopol(formattedNopol);
     const matchedHistory = norm ? vehicleHistoryMap.get(norm) : undefined;
     const prevAuto = autoFilledMetaBySlot[idx];
 
     setArmadaEntries((prev) =>
       prev.map((entry, i) => {
         if (i !== idx) return entry;
-        const nextEntry: SuratJalanArmadaEntry = { ...entry, noPolisi: upperVal };
+        const nextEntry: SuratJalanArmadaEntry = { ...entry, noPolisi: formattedNopol };
 
         if (matchedHistory) {
           const isDriverEmpty = !entry.namaDriver.trim();
@@ -792,8 +820,8 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
           const wasAutoHp = prevAuto && entry.noHpDriver === prevAuto.hp;
 
           if ((isDriverEmpty && isHpEmpty) || (wasAutoDriver && wasAutoHp)) {
-            nextEntry.namaDriver = matchedHistory.latestDriver;
-            nextEntry.noHpDriver = matchedHistory.latestHp;
+            nextEntry.namaDriver = (matchedHistory.latestDriver || '').toUpperCase();
+            nextEntry.noHpDriver = (matchedHistory.latestHp || '').toUpperCase();
           }
         }
         return nextEntry;
@@ -805,8 +833,8 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
         ...prev,
         [idx]: {
           normalizedNopol: matchedHistory.normalizedNopol,
-          driver: matchedHistory.latestDriver,
-          hp: matchedHistory.latestHp
+          driver: (matchedHistory.latestDriver || '').toUpperCase(),
+          hp: (matchedHistory.latestHp || '').toUpperCase()
         }
       }));
     } else if (prevAuto && norm !== prevAuto.normalizedNopol) {
@@ -824,15 +852,20 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
     variant?: VehicleDriverHistoryVariant
   ) => {
     setFormError(null);
-    const chosenDriver = variant ? (variant.namaDriver === '-' ? '' : variant.namaDriver) : vehicle.latestDriver;
-    const chosenHp = variant ? (variant.noHpDriver === '-' ? '' : variant.noHpDriver) : vehicle.latestHp;
+    const chosenDriver = (
+      variant ? (variant.namaDriver === '-' ? '' : variant.namaDriver) : vehicle.latestDriver
+    ).toUpperCase();
+    const chosenHp = (
+      variant ? (variant.noHpDriver === '-' ? '' : variant.noHpDriver) : vehicle.latestHp
+    ).toUpperCase();
+    const formattedNopol = formatNopolPlate(vehicle.displayNopol) || vehicle.displayNopol.toUpperCase();
 
     setArmadaEntries((prev) =>
       prev.map((entry, i) =>
         i === idx
           ? {
               ...entry,
-              noPolisi: vehicle.displayNopol,
+              noPolisi: formattedNopol,
               namaDriver: chosenDriver,
               noHpDriver: chosenHp
             }
@@ -974,10 +1007,12 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
       const groupKey = pallet.kodeItem.trim() || pallet.namaBarang.trim();
 
       if (!groups[groupKey]) {
+        const kodeUpper = (pallet.kodeItem || '').trim().toUpperCase();
+        const namaUpper = (pallet.namaBarang || '').trim().toUpperCase();
         groups[groupKey] = {
-          kodeItem: pallet.kodeItem,
-          namaBarang: pallet.namaBarang,
-          detailBarang: `${pallet.kodeItem} (1 X ${beratPerBox} KG)`,
+          kodeItem: kodeUpper,
+          namaBarang: namaUpper,
+          detailBarang: `${kodeUpper} (1 X ${beratPerBox} KG)`,
           qtyBox: 0,
           beratPerBoxKg: beratPerBox,
           totalKg: 0,
@@ -988,17 +1023,20 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
 
       groups[groupKey].qtyBox += boxQty;
       groups[groupKey].totalKg += kgWeight;
-      groups[groupKey].palletList.push(pallet.nomorPallet);
+      groups[groupKey].palletList.push(pallet.nomorPallet.toUpperCase());
       const palletBatches = getPalletBatches(pallet);
       if (palletBatches.length > 0) {
         palletBatches.forEach((b) => {
-          const batchCode = (b.noBatch || '').trim();
+          const batchCode = (b.noBatch || '').trim().toUpperCase();
           if (batchCode && !groups[groupKey].batchList.includes(batchCode)) {
             groups[groupKey].batchList.push(batchCode);
           }
         });
-      } else if (pallet.noBatch && !groups[groupKey].batchList.includes(pallet.noBatch)) {
-        groups[groupKey].batchList.push(pallet.noBatch);
+      } else if (pallet.noBatch) {
+        const batchUpper = pallet.noBatch.trim().toUpperCase();
+        if (batchUpper && !groups[groupKey].batchList.includes(batchUpper)) {
+          groups[groupKey].batchList.push(batchUpper);
+        }
       }
 
       totalBox += boxQty;
@@ -1055,9 +1093,18 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
     patch: Partial<ManualItemEntry>
   ) => {
     setFormError(null);
+    const normalizedPatch: Partial<ManualItemEntry> = { ...patch };
+    if (typeof normalizedPatch.namaBarang === 'string') {
+      normalizedPatch.namaBarang = normalizedPatch.namaBarang.toUpperCase();
+    }
+    if (typeof normalizedPatch.kodeItem === 'string') {
+      normalizedPatch.kodeItem = normalizedPatch.kodeItem.toUpperCase();
+    }
     setManualItemsBySj((prev) => {
       const current = prev[sjIdx] && prev[sjIdx].length > 0 ? prev[sjIdx] : getManualRowsForSj(sjIdx);
-      const updated = current.map((row, idx) => (idx === rowIdx ? { ...row, ...patch } : row));
+      const updated = current.map((row, idx) =>
+        idx === rowIdx ? { ...row, ...normalizedPatch } : row
+      );
       return { ...prev, [sjIdx]: updated };
     });
   };
@@ -1085,8 +1132,8 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
     handleUpdateManualRow(sjIdx, rowIdx, {
       masterItemId: item.id,
       isCustom: false,
-      kodeItem: item.kodeItem,
-      namaBarang: item.namaBarang,
+      kodeItem: item.kodeItem.toUpperCase(),
+      namaBarang: item.namaBarang.toUpperCase(),
       beratPerBoxKg: String(item.beratPerBoxKg ?? 30)
     });
   };
@@ -1114,13 +1161,13 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
     let totalKg = 0;
 
     rows.forEach((r) => {
-      const nama = r.namaBarang.trim();
+      const nama = r.namaBarang.trim().toUpperCase();
       const qty = parseFloat(r.qtyBox) || 0;
       const berat = parseFloat(r.beratPerBoxKg);
       const beratPerBox = !isNaN(berat) && berat >= 0 ? berat : 30;
       if (!nama || qty <= 0) return;
 
-      const kode = r.kodeItem.trim();
+      const kode = r.kodeItem.trim().toUpperCase();
       const rowKg = Math.round(qty * beratPerBox * 100) / 100;
       summaryList.push({
         kodeItem: kode || '-',
@@ -1217,10 +1264,12 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
           grandTotalKg: 0
         };
 
-        const sjNo =
+        const sjNo = (
           i === 0
             ? noSuratJalan.trim() || slot.noSuratJalan.trim() || baseNo
-            : slot.noSuratJalan.trim() || incrementSuratJalanNo(baseNo, i);
+            : slot.noSuratJalan.trim() || incrementSuratJalanNo(baseNo, i)
+        ).toUpperCase();
+        const formattedNopol = formatNopolPlate(slot.noPolisi) || slot.noPolisi.trim().toUpperCase();
 
         const newRecord: SuratJalanRecord = {
           id: `sj-${Date.now()}-${i}-${Math.random().toString(36).substring(2, 6)}`,
@@ -1233,12 +1282,12 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
           tanggalPengambilanFormatted: formattedTanggalCetak,
           ...(customRaw ? { tglJamCetakCustom: customRaw } : {}),
           waktuCetakFormatted: formattedWaktuCetak,
-          noPolisi: slot.noPolisi.trim().toUpperCase(),
-          noSpp: noSpp.trim() || '-',
-          noPo: noPo.trim() || '-',
-          noKontainer: noKontainer.trim() || '-',
-          noFaktur: noFaktur.trim() || '-',
-          noInvoice: noInvoice.trim() || '-',
+          noPolisi: formattedNopol,
+          noSpp: noSpp.trim().toUpperCase() || '-',
+          noPo: noPo.trim().toUpperCase() || '-',
+          noKontainer: noKontainer.trim().toUpperCase() || '-',
+          noFaktur: noFaktur.trim().toUpperCase() || '-',
+          noInvoice: noInvoice.trim().toUpperCase() || '-',
           ruteDariId: ruteDariObj?.id || 'rute-dari',
           ruteDariNama: ruteDariObj?.namaLokasi || 'PT. SANTOS JAYA ABADI GUDANG KONVERSI 1 - SUKODONO',
           ...(ruteDariObj?.alamat ? { ruteDariAlamat: ruteDariObj.alamat } : {}),
@@ -1247,20 +1296,23 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
           ruteTujuanNama: ruteTujuanObj?.namaLokasi || 'PT. SANTOS JAYA ABADI GUDANG KONVERSI 1 - SEMARANG',
           ...(ruteTujuanObj?.alamat ? { ruteTujuanAlamat: ruteTujuanObj.alamat } : {}),
           vendorId: selectedVendorId,
-          namaVendorArmada:
+          namaVendorArmada: (
             customVendorNama ||
             masterVendors.find((v) => v.id === selectedVendorId)?.namaVendor ||
-            'Vendor Armada',
+            'VENDOR ARMADA'
+          )
+            .trim()
+            .toUpperCase(),
           tarif: tarif,
           ppnPersen: ppnPersen,
           tarifTotal: tarif + (tarif * ppnPersen) / 100,
-          namaDriver: slot.namaDriver.trim(),
-          noHpDriver: slot.noHpDriver.trim(),
+          namaDriver: slot.namaDriver.trim().toUpperCase(),
+          noHpDriver: slot.noHpDriver.trim().toUpperCase(),
           palletIds: slotSummary.pallets.map((p) => p.id),
           itemsSummary: slotSummary.itemsSummary,
           grandTotalBox: slotSummary.grandTotalBox,
           grandTotalKg: slotSummary.grandTotalKg,
-          note: slot.note.trim(),
+          note: slot.note.trim().toUpperCase(),
           createdAt: new Date(now.getTime() + i).toISOString(),
           updatedAt: new Date(now.getTime() + i).toISOString(),
           lastUpdateAction:
@@ -1379,9 +1431,25 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
   const handleOpenEditModal = (sj: SuratJalanRecord) => {
     setEditError(null);
     setEditSuccessMsg(null);
-    const clonedItems: SuratJalanItemLine[] = (sj.itemsSummary || []).map((item) => ({ ...item }));
+    const clonedItems: SuratJalanItemLine[] = (sj.itemsSummary || []).map((item) => ({
+      ...item,
+      kodeItem: (item.kodeItem || '').toUpperCase(),
+      namaBarang: (item.namaBarang || '').toUpperCase(),
+      detailBarang: (item.detailBarang || '').toUpperCase()
+    }));
     setEditingRecord({
       ...sj,
+      noSuratJalan: (sj.noSuratJalan || '').toUpperCase(),
+      noPolisi: formatNopolPlate(sj.noPolisi) || (sj.noPolisi || '').toUpperCase(),
+      noSpp: (sj.noSpp || '').toUpperCase(),
+      noPo: (sj.noPo || '').toUpperCase(),
+      noKontainer: (sj.noKontainer || '').toUpperCase(),
+      noFaktur: (sj.noFaktur || '').toUpperCase(),
+      noInvoice: (sj.noInvoice || '').toUpperCase(),
+      namaVendorArmada: (sj.namaVendorArmada || '').toUpperCase(),
+      namaDriver: (sj.namaDriver || '').toUpperCase(),
+      noHpDriver: (sj.noHpDriver || '').toUpperCase(),
+      note: (sj.note || '').toUpperCase(),
       palletIds: [...(sj.palletIds || [])],
       itemsSummary: clonedItems
     });
@@ -1390,11 +1458,21 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
   };
 
   const handleUpdateEditItemRow = (idx: number, patch: Partial<SuratJalanItemLine>) => {
+    const normalizedPatch: Partial<SuratJalanItemLine> = { ...patch };
+    if (typeof normalizedPatch.namaBarang === 'string') {
+      normalizedPatch.namaBarang = normalizedPatch.namaBarang.toUpperCase();
+    }
+    if (typeof normalizedPatch.kodeItem === 'string') {
+      normalizedPatch.kodeItem = normalizedPatch.kodeItem.toUpperCase();
+    }
+    if (typeof normalizedPatch.detailBarang === 'string') {
+      normalizedPatch.detailBarang = normalizedPatch.detailBarang.toUpperCase();
+    }
     setEditingRecord((prev) => {
       if (!prev) return prev;
       const nextItems = prev.itemsSummary.map((item, i) => {
         if (i !== idx) return item;
-        const merged = { ...item, ...patch };
+        const merged = { ...item, ...normalizedPatch };
         const qty = Number(merged.qtyBox) || 0;
         const berat = Number(merged.beratPerBoxKg) || 0;
         return {
@@ -1459,9 +1537,9 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
         const berat = Number(it.beratPerBoxKg) || 0;
         return {
           ...it,
-          namaBarang: it.namaBarang.trim(),
-          kodeItem: (it.kodeItem || '-').trim(),
-          detailBarang: it.detailBarang.trim() || `(1 X ${berat} KG)`,
+          namaBarang: it.namaBarang.trim().toUpperCase(),
+          kodeItem: (it.kodeItem || '-').trim().toUpperCase(),
+          detailBarang: (it.detailBarang.trim() || `(1 X ${berat} KG)`).toUpperCase(),
           qtyBox: qty,
           beratPerBoxKg: berat,
           totalKg: Math.round(qty * berat * 100) / 100
@@ -1483,20 +1561,23 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
       const ppnVal = Number(editingRecord.ppnPersen) || 0;
       const grandTotalBox = cleanedItems.reduce((sum, it) => sum + it.qtyBox, 0);
       const grandTotalKg = cleanedItems.reduce((sum, it) => sum + it.totalKg, 0);
+      const formattedSjNo = editingRecord.noSuratJalan.trim().toUpperCase();
+      const formattedNopol =
+        formatNopolPlate(editingRecord.noPolisi) || editingRecord.noPolisi.trim().toUpperCase();
 
       const updatedRecord: SuratJalanRecord = {
         ...editingRecord,
-        noSuratJalan: editingRecord.noSuratJalan.trim(),
-        noPolisi: editingRecord.noPolisi.trim().toUpperCase(),
-        noSpp: (editingRecord.noSpp || '').trim() || '-',
-        noPo: editingRecord.noPo.trim() || '-',
-        noKontainer: (editingRecord.noKontainer || '').trim() || '-',
-        noFaktur: (editingRecord.noFaktur || '').trim() || '-',
-        noInvoice: (editingRecord.noInvoice || '').trim() || '-',
-        namaVendorArmada: editingRecord.namaVendorArmada.trim() || 'Vendor Armada',
-        namaDriver: editingRecord.namaDriver.trim(),
-        noHpDriver: editingRecord.noHpDriver.trim(),
-        note: (editingRecord.note || '').trim(),
+        noSuratJalan: formattedSjNo,
+        noPolisi: formattedNopol,
+        noSpp: (editingRecord.noSpp || '').trim().toUpperCase() || '-',
+        noPo: (editingRecord.noPo || '').trim().toUpperCase() || '-',
+        noKontainer: (editingRecord.noKontainer || '').trim().toUpperCase() || '-',
+        noFaktur: (editingRecord.noFaktur || '').trim().toUpperCase() || '-',
+        noInvoice: (editingRecord.noInvoice || '').trim().toUpperCase() || '-',
+        namaVendorArmada: editingRecord.namaVendorArmada.trim().toUpperCase() || 'VENDOR ARMADA',
+        namaDriver: editingRecord.namaDriver.trim().toUpperCase(),
+        noHpDriver: editingRecord.noHpDriver.trim().toUpperCase(),
+        note: (editingRecord.note || '').trim().toUpperCase(),
         tarif: tarifVal,
         ppnPersen: ppnVal,
         tarifTotal: tarifVal + (tarifVal * ppnVal) / 100,
@@ -1507,7 +1588,7 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
         grandTotalBox,
         grandTotalKg,
         updatedAt: new Date().toISOString(),
-        lastUpdateAction: `Edit Surat Jalan (${editingRecord.noSuratJalan.trim()})`
+        lastUpdateAction: `Edit Surat Jalan (${formattedSjNo})`
       };
 
       if (!editTglJamInput.trim()) {
@@ -1654,8 +1735,8 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
 
   const handleStartInlineDocEdit = (sj: SuratJalanRecord) => {
     setInlineDocEditId(sj.id);
-    setInlineNoSpp(sj.noSpp && sj.noSpp !== '-' ? sj.noSpp : '');
-    setInlineNoPo(sj.noPo && sj.noPo !== '-' ? sj.noPo : '');
+    setInlineNoSpp(sj.noSpp && sj.noSpp !== '-' ? sj.noSpp.toUpperCase() : '');
+    setInlineNoPo(sj.noPo && sj.noPo !== '-' ? sj.noPo.toUpperCase() : '');
     setEditSuccessMsg(null);
   };
 
@@ -1664,8 +1745,8 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
     try {
       const updatedRecord: SuratJalanRecord = {
         ...sj,
-        noSpp: inlineNoSpp.trim() || '-',
-        noPo: inlineNoPo.trim() || '-',
+        noSpp: inlineNoSpp.trim().toUpperCase() || '-',
+        noPo: inlineNoPo.trim().toUpperCase() || '-',
         updatedAt: new Date().toISOString(),
         lastUpdateAction: `Update No. SPP / PO (${sj.noSuratJalan})`
       };
@@ -1789,7 +1870,7 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
                   value={noSuratJalan}
                   onChange={(e) => {
                     hasManualSjNoEditRef.current = true;
-                    const val = e.target.value;
+                    const val = e.target.value.toUpperCase();
                     setNoSuratJalan(val);
                     setArmadaEntries((prev) =>
                       prev.map((entry, idx) => ({
@@ -1799,7 +1880,7 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
                     );
                   }}
                   placeholder="FGW/26/XI/032"
-                  className="w-full font-mono font-bold bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-blue-600 dark:text-blue-400"
+                  className="w-full font-mono font-bold uppercase bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-blue-600 dark:text-blue-400"
                 />
               </div>
 
@@ -1810,9 +1891,9 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
                 <input
                   type="text"
                   value={noSpp}
-                  onChange={(e) => setNoSpp(e.target.value)}
-                  placeholder="Masukkan No. SPP (opsional)"
-                  className="w-full font-mono bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-100"
+                  onChange={(e) => setNoSpp(e.target.value.toUpperCase())}
+                  placeholder="MASUKKAN NO. SPP (OPSIONAL)"
+                  className="w-full font-mono uppercase bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-100"
                 />
               </div>
 
@@ -1824,9 +1905,9 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
                 <input
                   type="text"
                   value={noPo}
-                  onChange={(e) => setNoPo(e.target.value)}
-                  placeholder="Masukkan No. PO (opsional)"
-                  className="w-full font-mono bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-100"
+                  onChange={(e) => setNoPo(e.target.value.toUpperCase())}
+                  placeholder="MASUKKAN NO. PO (OPSIONAL)"
+                  className="w-full font-mono uppercase bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-100"
                 />
               </div>
 
@@ -1837,9 +1918,9 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
                 <input
                   type="text"
                   value={noKontainer}
-                  onChange={(e) => setNoKontainer(e.target.value)}
-                  placeholder="Masukkan No. Kontainer..."
-                  className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-100 font-mono"
+                  onChange={(e) => setNoKontainer(e.target.value.toUpperCase())}
+                  placeholder="MASUKKAN NO. KONTAINER..."
+                  className="w-full uppercase bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-100 font-mono"
                 />
               </div>
 
@@ -1850,9 +1931,9 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
                 <input
                   type="text"
                   value={noFaktur}
-                  onChange={(e) => setNoFaktur(e.target.value)}
-                  placeholder="Masukkan No. Faktur..."
-                  className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-100 font-mono"
+                  onChange={(e) => setNoFaktur(e.target.value.toUpperCase())}
+                  placeholder="MASUKKAN NO. FAKTUR..."
+                  className="w-full uppercase bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-100 font-mono"
                 />
               </div>
 
@@ -1863,9 +1944,9 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
                 <input
                   type="text"
                   value={noInvoice}
-                  onChange={(e) => setNoInvoice(e.target.value)}
-                  placeholder="Masukkan No. Invoice..."
-                  className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-100 font-mono"
+                  onChange={(e) => setNoInvoice(e.target.value.toUpperCase())}
+                  placeholder="MASUKKAN NO. INVOICE..."
+                  className="w-full uppercase bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-100 font-mono"
                 />
               </div>
 
@@ -2044,9 +2125,9 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
                           <input
                             type="text"
                             value={customVendorNama}
-                            onChange={(e) => setCustomVendorNama(e.target.value)}
-                            placeholder="Ketik nama vendor armada..."
-                            className="w-full bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-1.5 text-xs"
+                            onChange={(e) => setCustomVendorNama(e.target.value.toUpperCase())}
+                            placeholder="KETIK NAMA VENDOR ARMADA..."
+                            className="w-full uppercase bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-1.5 text-xs"
                           />
                         )}
                         <div className="flex items-center gap-2">
@@ -2101,9 +2182,9 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
                         <input
                           type="text"
                           value={customVendorNama}
-                          onChange={(e) => setCustomVendorNama(e.target.value)}
-                          placeholder="Masukkan nama vendor armada..."
-                          className="w-full mt-1.5 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-1.5 text-xs"
+                          onChange={(e) => setCustomVendorNama(e.target.value.toUpperCase())}
+                          placeholder="MASUKKAN NAMA VENDOR ARMADA..."
+                          className="w-full mt-1.5 uppercase bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-1.5 text-xs"
                         />
                       )}
                     </div>
@@ -2259,7 +2340,7 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
                                 onChange={(e) =>
                                   handleUpdateArmadaEntry(idx, 'noSuratJalan', e.target.value)
                                 }
-                                className="font-mono font-bold text-xs bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded px-2 py-0.5 text-blue-700 dark:text-blue-300 w-36"
+                                className="font-mono font-bold uppercase text-xs bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded px-2 py-0.5 text-blue-700 dark:text-blue-300 w-36"
                                 title="Nomor Surat Jalan"
                               />
                               <span className="text-[11px] font-semibold text-emerald-700 dark:text-emerald-400">
@@ -2306,7 +2387,7 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
                                   handleNopolInputChange(idx, e.target.value);
                                   setOpenNopolDropdownIdx(idx);
                                 }}
-                                placeholder="Ketik / pilih nopol kendaraan..."
+                                placeholder="Contoh: AB 8996 OE"
                                 className={`w-full font-bold uppercase tracking-wider bg-slate-50 dark:bg-slate-800 border rounded-lg pl-3 pr-8 py-2 text-slate-900 dark:text-slate-100 ${
                                   blNopol
                                     ? 'border-rose-500 ring-2 ring-rose-500/20 text-rose-700 dark:text-rose-300'
@@ -2410,8 +2491,8 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
                               onChange={(e) =>
                                 handleUpdateArmadaEntry(idx, 'namaDriver', e.target.value)
                               }
-                              placeholder="Otomatis terisi dari history nopol"
-                              className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-100"
+                              placeholder="OTOMATIS TERISI DARI HISTORY NOPOL"
+                              className="w-full uppercase bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-100"
                             />
                           </div>
 
@@ -2426,8 +2507,8 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
                               onChange={(e) =>
                                 handleUpdateArmadaEntry(idx, 'noHpDriver', e.target.value)
                               }
-                              placeholder="Otomatis terisi dari history nopol"
-                              className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-100"
+                              placeholder="OTOMATIS TERISI DARI HISTORY NOPOL"
+                              className="w-full uppercase bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-100"
                             />
                           </div>
 
@@ -2441,8 +2522,8 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
                               onChange={(e) =>
                                 handleUpdateArmadaEntry(idx, 'note', e.target.value)
                               }
-                              placeholder="Contoh: Muatan konversi reguler"
-                              className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-100"
+                              placeholder="CONTOH: MUATAN KONVERSI REGULER"
+                              className="w-full uppercase bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-100"
                             />
                           </div>
                         </div>
@@ -3016,11 +3097,11 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
                                         value={row.namaBarang}
                                         onChange={(e) =>
                                           handleUpdateManualRow(sjIdx, rowIdx, {
-                                            namaBarang: e.target.value
+                                            namaBarang: e.target.value.toUpperCase()
                                           })
                                         }
-                                        placeholder="Ketik nama barang manual..."
-                                        className="w-full mt-1.5 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-2.5 py-1.5 font-semibold text-slate-900 dark:text-slate-100"
+                                        placeholder="KETIK NAMA BARANG MANUAL..."
+                                        className="w-full mt-1.5 uppercase bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-2.5 py-1.5 font-semibold text-slate-900 dark:text-slate-100"
                                       />
                                     )}
                                   </div>
@@ -3034,11 +3115,11 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
                                       value={row.kodeItem}
                                       onChange={(e) =>
                                         handleUpdateManualRow(sjIdx, rowIdx, {
-                                          kodeItem: e.target.value
+                                          kodeItem: e.target.value.toUpperCase()
                                         })
                                       }
-                                      placeholder="Otomatis dari master / opsional"
-                                      className="w-full font-mono bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-800 dark:text-slate-100"
+                                      placeholder="OTOMATIS DARI MASTER / OPSIONAL"
+                                      className="w-full font-mono uppercase bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-800 dark:text-slate-100"
                                     />
                                   </div>
 
@@ -3412,14 +3493,14 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
                                 <input
                                   type="text"
                                   value={inlineNoSpp}
-                                  onChange={(e) => setInlineNoSpp(e.target.value)}
+                                  onChange={(e) => setInlineNoSpp(e.target.value.toUpperCase())}
                                   onKeyDown={(e) => {
                                     if (e.key === 'Enter') handleSaveInlineDocEdit(sj);
                                     if (e.key === 'Escape') setInlineDocEditId(null);
                                   }}
-                                  placeholder="Input No. SPP..."
+                                  placeholder="INPUT NO. SPP..."
                                   autoFocus
-                                  className="flex-1 font-mono text-[11px] bg-white dark:bg-slate-900 border border-blue-400 dark:border-blue-600 rounded px-2 py-1 text-slate-900 dark:text-white focus:outline-none"
+                                  className="flex-1 font-mono uppercase text-[11px] bg-white dark:bg-slate-900 border border-blue-400 dark:border-blue-600 rounded px-2 py-1 text-slate-900 dark:text-white focus:outline-none"
                                 />
                               </div>
                               <div className="flex items-center gap-1.5">
@@ -3429,13 +3510,13 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
                                 <input
                                   type="text"
                                   value={inlineNoPo}
-                                  onChange={(e) => setInlineNoPo(e.target.value)}
+                                  onChange={(e) => setInlineNoPo(e.target.value.toUpperCase())}
                                   onKeyDown={(e) => {
                                     if (e.key === 'Enter') handleSaveInlineDocEdit(sj);
                                     if (e.key === 'Escape') setInlineDocEditId(null);
                                   }}
-                                  placeholder="Input No. PO..."
-                                  className="flex-1 font-mono text-[11px] bg-white dark:bg-slate-900 border border-blue-400 dark:border-blue-600 rounded px-2 py-1 text-slate-900 dark:text-white focus:outline-none"
+                                  placeholder="INPUT NO. PO..."
+                                  className="flex-1 font-mono uppercase text-[11px] bg-white dark:bg-slate-900 border border-blue-400 dark:border-blue-600 rounded px-2 py-1 text-slate-900 dark:text-white focus:outline-none"
                                 />
                               </div>
                               <div className="flex items-center gap-1.5 pt-0.5">
@@ -3513,7 +3594,7 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
                           </div>
                         </td>
                         <td className="py-2.5 px-3 font-mono font-bold tracking-wider whitespace-nowrap">
-                          {sj.noPolisi}
+                          {formatNopolPlate(sj.noPolisi) || sj.noPolisi}
                         </td>
                         <td className="py-2.5 px-3">
                           <div className="font-semibold text-slate-800 dark:text-slate-200">
@@ -3646,9 +3727,12 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
                     type="text"
                     value={editingRecord.noSuratJalan}
                     onChange={(e) =>
-                      setEditingRecord({ ...editingRecord, noSuratJalan: e.target.value })
+                      setEditingRecord({
+                        ...editingRecord,
+                        noSuratJalan: e.target.value.toUpperCase()
+                      })
                     }
-                    className="w-full font-mono font-bold bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-blue-600 dark:text-blue-400"
+                    className="w-full font-mono font-bold uppercase bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-blue-600 dark:text-blue-400"
                   />
                 </div>
 
@@ -3672,10 +3756,13 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
                     type="text"
                     value={editingRecord.noSpp === '-' ? '' : editingRecord.noSpp || ''}
                     onChange={(e) =>
-                      setEditingRecord({ ...editingRecord, noSpp: e.target.value })
+                      setEditingRecord({
+                        ...editingRecord,
+                        noSpp: e.target.value.toUpperCase()
+                      })
                     }
-                    placeholder="Masukkan No. SPP..."
-                    className="w-full font-mono bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2"
+                    placeholder="MASUKKAN NO. SPP..."
+                    className="w-full font-mono uppercase bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2"
                   />
                 </div>
 
@@ -3687,10 +3774,13 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
                     type="text"
                     value={editingRecord.noPo === '-' ? '' : editingRecord.noPo}
                     onChange={(e) =>
-                      setEditingRecord({ ...editingRecord, noPo: e.target.value })
+                      setEditingRecord({
+                        ...editingRecord,
+                        noPo: e.target.value.toUpperCase()
+                      })
                     }
-                    placeholder="Masukkan No. PO..."
-                    className="w-full font-mono bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2"
+                    placeholder="MASUKKAN NO. PO..."
+                    className="w-full font-mono uppercase bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2"
                   />
                 </div>
 
@@ -3702,10 +3792,13 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
                     type="text"
                     value={editingRecord.noKontainer === '-' ? '' : editingRecord.noKontainer || ''}
                     onChange={(e) =>
-                      setEditingRecord({ ...editingRecord, noKontainer: e.target.value })
+                      setEditingRecord({
+                        ...editingRecord,
+                        noKontainer: e.target.value.toUpperCase()
+                      })
                     }
                     placeholder="-"
-                    className="w-full font-mono bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2"
+                    className="w-full font-mono uppercase bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2"
                   />
                 </div>
 
@@ -3717,10 +3810,13 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
                     type="text"
                     value={editingRecord.noFaktur === '-' ? '' : editingRecord.noFaktur || ''}
                     onChange={(e) =>
-                      setEditingRecord({ ...editingRecord, noFaktur: e.target.value })
+                      setEditingRecord({
+                        ...editingRecord,
+                        noFaktur: e.target.value.toUpperCase()
+                      })
                     }
                     placeholder="-"
-                    className="w-full font-mono bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2"
+                    className="w-full font-mono uppercase bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2"
                   />
                 </div>
 
@@ -3732,10 +3828,13 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
                     type="text"
                     value={editingRecord.noInvoice === '-' ? '' : editingRecord.noInvoice || ''}
                     onChange={(e) =>
-                      setEditingRecord({ ...editingRecord, noInvoice: e.target.value })
+                      setEditingRecord({
+                        ...editingRecord,
+                        noInvoice: e.target.value.toUpperCase()
+                      })
                     }
                     placeholder="-"
-                    className="w-full font-mono bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2"
+                    className="w-full font-mono uppercase bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2"
                   />
                 </div>
               </div>
@@ -3823,8 +3922,8 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
                         setTimeout(() => setOpenEditNopolDropdown(false), 180);
                       }}
                       onChange={(e) => {
-                        const upper = e.target.value.toUpperCase();
-                        const norm = normalizeNopol(upper);
+                        const formatted = formatNopolPlate(e.target.value);
+                        const norm = normalizeNopol(formatted);
                         const hist = norm ? vehicleHistoryMap.get(norm) : undefined;
                         setEditingRecord((prev) => {
                           if (!prev) return prev;
@@ -3832,18 +3931,19 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
                             hist && !prev.namaDriver.trim() && !prev.noHpDriver.trim();
                           return {
                             ...prev,
-                            noPolisi: upper,
+                            noPolisi: formatted,
                             ...(shouldAutoFill
                               ? {
-                                  namaDriver: hist.latestDriver,
-                                  noHpDriver: hist.latestHp
+                                  namaDriver: (hist.latestDriver || '').toUpperCase(),
+                                  noHpDriver: (hist.latestHp || '').toUpperCase()
                                 }
                               : {})
                           };
                         });
                         setOpenEditNopolDropdown(true);
                       }}
-                      className="w-full font-bold uppercase bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg pl-3 pr-8 py-2"
+                      placeholder="Contoh: AB 8996 OE"
+                      className="w-full font-bold uppercase tracking-wider bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg pl-3 pr-8 py-2"
                     />
                     {vehicleHistoryList.length > 0 && (
                       <button
@@ -3878,9 +3978,9 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
                                   prev
                                     ? {
                                         ...prev,
-                                        noPolisi: v.displayNopol,
-                                        namaDriver: v.latestDriver || prev.namaDriver,
-                                        noHpDriver: v.latestHp || prev.noHpDriver
+                                        noPolisi: formatNopolPlate(v.displayNopol) || v.displayNopol.toUpperCase(),
+                                        namaDriver: (v.latestDriver || prev.namaDriver || '').toUpperCase(),
+                                        noHpDriver: (v.latestHp || prev.noHpDriver || '').toUpperCase()
                                       }
                                     : prev
                                 );
@@ -3916,9 +4016,12 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
                     type="text"
                     value={editingRecord.namaDriver}
                     onChange={(e) =>
-                      setEditingRecord({ ...editingRecord, namaDriver: e.target.value })
+                      setEditingRecord({
+                        ...editingRecord,
+                        namaDriver: e.target.value.toUpperCase()
+                      })
                     }
-                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2"
+                    className="w-full uppercase bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2"
                   />
                 </div>
 
@@ -3930,9 +4033,12 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
                     type="text"
                     value={editingRecord.noHpDriver}
                     onChange={(e) =>
-                      setEditingRecord({ ...editingRecord, noHpDriver: e.target.value })
+                      setEditingRecord({
+                        ...editingRecord,
+                        noHpDriver: e.target.value.toUpperCase()
+                      })
                     }
-                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2"
+                    className="w-full uppercase bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2"
                   />
                 </div>
 
@@ -3944,9 +4050,12 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
                     type="text"
                     value={editingRecord.namaVendorArmada}
                     onChange={(e) =>
-                      setEditingRecord({ ...editingRecord, namaVendorArmada: e.target.value })
+                      setEditingRecord({
+                        ...editingRecord,
+                        namaVendorArmada: e.target.value.toUpperCase()
+                      })
                     }
-                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2"
+                    className="w-full uppercase bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2"
                   />
                 </div>
 
@@ -4030,10 +4139,13 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
                     type="text"
                     value={editingRecord.note || ''}
                     onChange={(e) =>
-                      setEditingRecord({ ...editingRecord, note: e.target.value })
+                      setEditingRecord({
+                        ...editingRecord,
+                        note: e.target.value.toUpperCase()
+                      })
                     }
-                    placeholder="Catatan di formulir Surat Jalan"
-                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2"
+                    placeholder="CATATAN DI FORMULIR SURAT JALAN"
+                    className="w-full uppercase bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2"
                   />
                 </div>
               </div>
@@ -4109,10 +4221,12 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
                           type="text"
                           value={item.namaBarang}
                           onChange={(e) =>
-                            handleUpdateEditItemRow(idx, { namaBarang: e.target.value })
+                            handleUpdateEditItemRow(idx, {
+                              namaBarang: e.target.value.toUpperCase()
+                            })
                           }
-                          placeholder="Nama barang..."
-                          className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-2.5 py-1.5 font-semibold"
+                          placeholder="NAMA BARANG..."
+                          className="w-full uppercase bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-2.5 py-1.5 font-semibold"
                         />
                       </div>
 
@@ -4124,9 +4238,11 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
                           type="text"
                           value={item.detailBarang}
                           onChange={(e) =>
-                            handleUpdateEditItemRow(idx, { detailBarang: e.target.value })
+                            handleUpdateEditItemRow(idx, {
+                              detailBarang: e.target.value.toUpperCase()
+                            })
                           }
-                          className="w-full font-mono bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-2.5 py-1.5"
+                          className="w-full font-mono uppercase bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-2.5 py-1.5"
                         />
                       </div>
 

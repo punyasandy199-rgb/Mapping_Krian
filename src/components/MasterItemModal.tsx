@@ -39,6 +39,28 @@ function normalizeNopol(nopol?: string): string {
   return (nopol || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 }
 
+function formatNopolPlate(raw?: string): string {
+  const clean = (raw || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  let g1 = '';
+  let g2 = '';
+  let g3 = '';
+  for (let i = 0; i < clean.length; i++) {
+    const ch = clean[i];
+    const isLetter = ch >= 'A' && ch <= 'Z';
+    const isDigit = ch >= '0' && ch <= '9';
+    if (g2.length === 0 && g3.length === 0) {
+      if (isLetter) g1 += ch;
+      else if (isDigit && g1.length > 0) g2 += ch;
+    } else if (g3.length === 0) {
+      if (isDigit) g2 += ch;
+      else if (isLetter) g3 += ch;
+    } else {
+      if (isLetter) g3 += ch;
+    }
+  }
+  return [g1, g2, g3].filter(Boolean).join(' ');
+}
+
 interface VehicleDriverHistoryVariant {
   namaDriver: string;
   noHpDriver: string;
@@ -315,6 +337,92 @@ export const MasterItemModal: React.FC<MasterItemModalProps> = ({
   const [whKeterangan, setWhKeterangan] = useState('');
   const [whError, setWhError] = useState('');
 
+  // Memoized Blacklist & History Nopol (must execute unconditionally before early return)
+  const activeBlacklistRecords = useMemo(
+    () => blacklistRecords.filter((b) => b.status !== 'RESOLVED'),
+    [blacklistRecords]
+  );
+
+  const findBlacklistForNopol = (nopol?: string): BlacklistRecord | undefined => {
+    const norm = normalizeNopol(nopol);
+    if (!norm) return undefined;
+    return activeBlacklistRecords.find(
+      (b) => b.tipe === 'NOPOL' && normalizeNopol(b.identifier) === norm
+    );
+  };
+
+  const vehicleHistoryList = useMemo<VehicleNopolHistoryEntry[]>(() => {
+    const sorted = [...suratJalanHistory].sort(
+      (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+    );
+    const map = new Map<string, VehicleNopolHistoryEntry>();
+
+    sorted.forEach((sj) => {
+      const rawNopol = (sj.noPolisi || '').trim().toUpperCase();
+      const norm = normalizeNopol(rawNopol);
+      if (!norm) return;
+      const formattedNopol = formatNopolPlate(rawNopol) || rawNopol;
+
+      const driver = (sj.namaDriver || '').trim().toUpperCase();
+      const hp = (sj.noHpDriver || '').trim().toUpperCase();
+      const vendor = (sj.namaVendorArmada || '').trim().toUpperCase();
+      const tanggal = sj.tanggalPengambilanFormatted || sj.tanggal || '';
+      const tujuan = (sj.ruteTujuanKode || sj.ruteTujuanNama || '-').toUpperCase();
+
+      let entry = map.get(norm);
+      if (!entry) {
+        entry = {
+          normalizedNopol: norm,
+          displayNopol: formattedNopol,
+          latestDriver: driver,
+          latestHp: hp,
+          latestVendor: vendor,
+          tripCount: 0,
+          lastUsedDate: tanggal,
+          lastDestination: tujuan,
+          driverVariants: [],
+          recentTrips: []
+        };
+        map.set(norm, entry);
+      } else {
+        if (!entry.displayNopol.includes(' ') && formattedNopol.includes(' ')) {
+          entry.displayNopol = formattedNopol;
+        }
+        if (!entry.latestDriver && driver) entry.latestDriver = driver;
+        if (!entry.latestHp && hp) entry.latestHp = hp;
+      }
+
+      entry.tripCount += 1;
+
+      if (driver || hp) {
+        const variantKey = `${driver.toLowerCase()}::${hp.replace(/\s+/g, '')}`;
+        const alreadyHasVariant = entry.driverVariants.some(
+          (v) => `${v.namaDriver.toLowerCase()}::${v.noHpDriver.replace(/\s+/g, '')}` === variantKey
+        );
+        if (!alreadyHasVariant) {
+          entry.driverVariants.push({
+            namaDriver: driver || '-',
+            noHpDriver: hp || '-',
+            lastUsedDate: tanggal,
+            noSuratJalan: sj.noSuratJalan
+          });
+        }
+      }
+
+      entry.recentTrips.push({
+        id: sj.id,
+        noSuratJalan: sj.noSuratJalan,
+        tanggal,
+        tujuan,
+        vendor,
+        namaDriver: driver || '-',
+        noHpDriver: hp || '-'
+      });
+    });
+
+    return Array.from(map.values());
+  }, [suratJalanHistory]);
+
   if (!isOpen) return null;
 
   // Address lookup helper
@@ -550,94 +658,12 @@ export const MasterItemModal: React.FC<MasterItemModalProps> = ({
   // -------------------------------------------------------------
   // TAB 4 HANDLERS (BLACKLIST)
   // -------------------------------------------------------------
-  const activeBlacklistRecords = useMemo(
-    () => blacklistRecords.filter((b) => b.status !== 'RESOLVED'),
-    [blacklistRecords]
-  );
-
-  const findBlacklistForNopol = (nopol?: string): BlacklistRecord | undefined => {
-    const norm = normalizeNopol(nopol);
-    if (!norm) return undefined;
-    return activeBlacklistRecords.find(
-      (b) => b.tipe === 'NOPOL' && normalizeNopol(b.identifier) === norm
-    );
-  };
-
-  const vehicleHistoryList = useMemo<VehicleNopolHistoryEntry[]>(() => {
-    const sorted = [...suratJalanHistory].sort(
-      (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
-    );
-    const map = new Map<string, VehicleNopolHistoryEntry>();
-
-    sorted.forEach((sj) => {
-      const rawNopol = (sj.noPolisi || '').trim().toUpperCase();
-      const norm = normalizeNopol(rawNopol);
-      if (!norm) return;
-
-      const driver = (sj.namaDriver || '').trim();
-      const hp = (sj.noHpDriver || '').trim();
-      const vendor = (sj.namaVendorArmada || '').trim();
-      const tanggal = sj.tanggalPengambilanFormatted || sj.tanggal || '';
-      const tujuan = sj.ruteTujuanKode || sj.ruteTujuanNama || '-';
-
-      let entry = map.get(norm);
-      if (!entry) {
-        entry = {
-          normalizedNopol: norm,
-          displayNopol: rawNopol,
-          latestDriver: driver,
-          latestHp: hp,
-          latestVendor: vendor,
-          tripCount: 0,
-          lastUsedDate: tanggal,
-          lastDestination: tujuan,
-          driverVariants: [],
-          recentTrips: []
-        };
-        map.set(norm, entry);
-      } else {
-        if (!entry.displayNopol.includes(' ') && rawNopol.includes(' ')) {
-          entry.displayNopol = rawNopol;
-        }
-        if (!entry.latestDriver && driver) entry.latestDriver = driver;
-        if (!entry.latestHp && hp) entry.latestHp = hp;
-      }
-
-      entry.tripCount += 1;
-
-      if (driver || hp) {
-        const variantKey = `${driver.toLowerCase()}::${hp.replace(/\s+/g, '')}`;
-        const alreadyHasVariant = entry.driverVariants.some(
-          (v) => `${v.namaDriver.toLowerCase()}::${v.noHpDriver.replace(/\s+/g, '')}` === variantKey
-        );
-        if (!alreadyHasVariant) {
-          entry.driverVariants.push({
-            namaDriver: driver || '-',
-            noHpDriver: hp || '-',
-            lastUsedDate: tanggal,
-            noSuratJalan: sj.noSuratJalan
-          });
-        }
-      }
-
-      entry.recentTrips.push({
-        id: sj.id,
-        noSuratJalan: sj.noSuratJalan,
-        tanggal,
-        tujuan,
-        vendor,
-        namaDriver: driver || '-',
-        noHpDriver: hp || '-'
-      });
-    });
-
-    return Array.from(map.values());
-  }, [suratJalanHistory]);
-
   const handleSubmitBlacklist = (e: React.FormEvent) => {
     e.preventDefault();
     const cleanIdentifier =
-      blTipe === 'NOPOL' ? blIdentifier.trim().toUpperCase() : blIdentifier.trim();
+      blTipe === 'NOPOL'
+        ? formatNopolPlate(blIdentifier) || blIdentifier.trim().toUpperCase()
+        : blIdentifier.trim().toUpperCase();
     const cleanAlasan = blAlasan.trim();
 
     if (!cleanIdentifier) {
@@ -828,47 +854,48 @@ export const MasterItemModal: React.FC<MasterItemModalProps> = ({
   });
 
   // Filtered lists
+  const qLower = searchTerm.toLowerCase();
   const filteredTariffs = masterTariffs.filter(
     (t) =>
-      t.ruteAwal.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      t.ruteTujuan.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      t.vendor.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (t.alamatTujuan && t.alamatTujuan.toLowerCase().includes(searchTerm.toLowerCase()))
+      (t.ruteAwal || '').toLowerCase().includes(qLower) ||
+      (t.ruteTujuan || '').toLowerCase().includes(qLower) ||
+      (t.vendor || '').toLowerCase().includes(qLower) ||
+      (t.alamatTujuan || '').toLowerCase().includes(qLower)
   );
 
   const filteredItems = masterItems.filter(
     (item) =>
-      item.namaBarang.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      item.kodeItem.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (item.kategori && item.kategori.toLowerCase().includes(searchTerm.toLowerCase()))
+      (item.namaBarang || '').toLowerCase().includes(qLower) ||
+      (item.kodeItem || '').toLowerCase().includes(qLower) ||
+      (item.kategori || '').toLowerCase().includes(qLower)
   );
 
   const filteredVendors = masterVendors.filter(
     (v) =>
-      v.namaVendor.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (v.kontak && v.kontak.toLowerCase().includes(searchTerm.toLowerCase()))
+      (v.namaVendor || '').toLowerCase().includes(qLower) ||
+      (v.kontak || '').toLowerCase().includes(qLower)
   );
 
   const filteredBlacklist = blacklistRecords.filter(
     (b) =>
-      b.identifier.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      b.alasan.toLowerCase().includes(searchTerm.toLowerCase())
+      (b.identifier || '').toLowerCase().includes(qLower) ||
+      (b.alasan || '').toLowerCase().includes(qLower)
   );
 
   const filteredUsers = warehouseUsers.filter(
     (u) =>
-      u.nama.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      u.username.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      u.role.toLowerCase().includes(searchTerm.toLowerCase())
+      (u.nama || '').toLowerCase().includes(qLower) ||
+      (u.username || '').toLowerCase().includes(qLower) ||
+      (u.role || '').toLowerCase().includes(qLower)
   );
 
   const filteredWarehouses = masterWarehouses.filter(
     (w) =>
-      w.namaGudang.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      w.kodeGudang.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      w.locationGroup.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (w.rackLeftPrefix || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (w.rackRightPrefix || '').toLowerCase().includes(searchTerm.toLowerCase())
+      (w.namaGudang || '').toLowerCase().includes(qLower) ||
+      (w.kodeGudang || '').toLowerCase().includes(qLower) ||
+      (w.locationGroup || '').toLowerCase().includes(qLower) ||
+      (w.rackLeftPrefix || '').toLowerCase().includes(qLower) ||
+      (w.rackRightPrefix || '').toLowerCase().includes(qLower)
   );
 
   return (
@@ -2155,9 +2182,15 @@ export const MasterItemModal: React.FC<MasterItemModalProps> = ({
                     <input
                       type="text"
                       value={blIdentifier}
-                      onChange={(e) => setBlIdentifier(e.target.value.toUpperCase())}
+                      onChange={(e) =>
+                        setBlIdentifier(
+                          blTipe === 'NOPOL'
+                            ? formatNopolPlate(e.target.value)
+                            : e.target.value.toUpperCase()
+                        )
+                      }
                       placeholder="Contoh: B 9999 XYZ atau W 9931 PB"
-                      className="w-full bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs sm:text-sm font-bold text-rose-700 focus:outline-none focus:border-rose-500"
+                      className="w-full uppercase bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs sm:text-sm font-bold text-rose-700 focus:outline-none focus:border-rose-500"
                     />
                   </div>
 
