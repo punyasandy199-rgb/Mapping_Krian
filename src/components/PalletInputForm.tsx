@@ -93,6 +93,30 @@ export const PalletInputForm: React.FC<PalletInputFormProps> = ({
     createEmptyRow(1)
   ]);
 
+  // Sinkronkan namaBarang & satuan pada baris form yang terbuka saat Master Barang diupdate di User Management
+  useEffect(() => {
+    if (!masterItems || masterItems.length === 0) return;
+    setRows((prev) => {
+      let changed = false;
+      const next = prev.map((row) => {
+        const code = (row.kodeItem || '').trim().toUpperCase();
+        if (!code) return row;
+        const matched = masterItems.find(
+          (m) => (m.kodeItem || '').trim().toUpperCase() === code
+        );
+        if (!matched) return row;
+        const nextNama = matched.namaBarang;
+        const nextUnit = matched.satuan || row.unit || 'Box';
+        if (row.namaBarang !== nextNama || row.unit !== nextUnit) {
+          changed = true;
+          return { ...row, namaBarang: nextNama, unit: nextUnit };
+        }
+        return row;
+      });
+      return changed ? next : prev;
+    });
+  }, [masterItems]);
+
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [activeDropdownRowId, setActiveDropdownRowId] = useState<string | null>(null);
 

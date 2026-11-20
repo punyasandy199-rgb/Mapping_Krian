@@ -536,14 +536,47 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
     });
   }, [ruteDariObj, ruteTujuanObj, masterTariffs]);
 
-  // Saat Rute Awal & Tujuan berubah, atur pilihan vendor
+  const prevRoutePairRef = useRef<{ dariId: string; tujuanId: string } | null>(null);
+  const selectedVendorIdRef = useRef<string>(selectedVendorId);
+  selectedVendorIdRef.current = selectedVendorId;
+
+  // Saat Rute Awal & Tujuan berubah, atur pilihan vendor; saat Master Tarif berubah, update in-place tanpa mereset input
   useEffect(() => {
+    const prevPair = prevRoutePairRef.current;
+    const isSamePair =
+      prevPair !== null &&
+      prevPair.dariId === selectedDariId &&
+      prevPair.tujuanId === selectedTujuanId;
+    prevRoutePairRef.current = { dariId: selectedDariId, tujuanId: selectedTujuanId };
+
     if (!ruteDariObj || !ruteTujuanObj) {
       setSelectedVendorId('');
       setCustomVendorNama('');
       setTarif(0);
       setPpnPersen(0);
       setPpnInputText('0');
+      return;
+    }
+
+    if (isSamePair) {
+      const currentVendorKey = selectedVendorIdRef.current;
+      if (currentVendorKey.startsWith('tariff-')) {
+        const tariffId = currentVendorKey.slice('tariff-'.length);
+        const updatedTariff = matchingTariffs.find((t) => t.id === tariffId);
+        if (updatedTariff) {
+          setCustomVendorNama(updatedTariff.vendor);
+          setTarif(updatedTariff.tarif);
+          setPpnPersen(updatedTariff.ppnPersen);
+          setPpnInputText(String(updatedTariff.ppnPersen).replace('.', ','));
+        }
+      } else if (!currentVendorKey && matchingTariffs.length === 1) {
+        const single = matchingTariffs[0];
+        setSelectedVendorId(`tariff-${single.id}`);
+        setCustomVendorNama(single.vendor);
+        setTarif(single.tarif);
+        setPpnPersen(single.ppnPersen);
+        setPpnInputText(String(single.ppnPersen).replace('.', ','));
+      }
       return;
     }
 
@@ -571,7 +604,65 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
       setPpnPersen(defPpn);
       setPpnInputText(String(defPpn).replace('.', ','));
     }
-  }, [ruteDariObj, ruteTujuanObj, matchingTariffs]);
+  }, [selectedDariId, selectedTujuanId, ruteDariObj, ruteTujuanObj, matchingTariffs]);
+
+  // Sinkronkan nama vendor jika Master Vendor diupdate di User Management saat form terbuka
+  useEffect(() => {
+    const currentKey = selectedVendorIdRef.current;
+    if (
+      !currentKey ||
+      currentKey === 'custom' ||
+      currentKey.startsWith('tariff-') ||
+      currentKey.startsWith('tname-')
+    ) {
+      return;
+    }
+    const matchedVendor = masterVendors.find((mv) => mv.id === currentKey);
+    if (matchedVendor) {
+      setCustomVendorNama(matchedVendor.namaVendor);
+    }
+  }, [masterVendors]);
+
+  // Sinkronkan item manual yang terhubung ke Master Barang jika diedit di User Management
+  useEffect(() => {
+    if (!masterItems || masterItems.length === 0) return;
+    setManualItemsBySj((prev) => {
+      const keys = Object.keys(prev);
+      if (keys.length === 0) return prev;
+      let anyChanged = false;
+      const next: Record<number, ManualItemEntry[]> = {};
+      keys.forEach((rawKey) => {
+        const idx = Number(rawKey);
+        const rows = prev[idx];
+        const nextRows = rows.map((row) => {
+          if (!row.masterItemId || row.isCustom || row.masterItemId === '__CUSTOM__') {
+            return row;
+          }
+          const matched = masterItems.find((m) => m.id === row.masterItemId);
+          if (!matched) return row;
+          const nextKode = matched.kodeItem.toUpperCase();
+          const nextNama = matched.namaBarang.toUpperCase();
+          const nextBerat = String(matched.beratPerBoxKg ?? 30);
+          if (
+            row.kodeItem === nextKode &&
+            row.namaBarang === nextNama &&
+            row.beratPerBoxKg === nextBerat
+          ) {
+            return row;
+          }
+          anyChanged = true;
+          return {
+            ...row,
+            kodeItem: nextKode,
+            namaBarang: nextNama,
+            beratPerBoxKg: nextBerat
+          };
+        });
+        next[idx] = nextRows;
+      });
+      return anyChanged ? next : prev;
+    });
+  }, [masterItems]);
 
   const handleSelectTariffCard = (t: MasterRouteTariff) => {
     setSelectedVendorId(`tariff-${t.id}`);

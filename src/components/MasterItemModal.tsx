@@ -130,10 +130,12 @@ interface MasterItemModalProps {
   // Blacklist
   blacklistRecords?: BlacklistRecord[];
   onAddBlacklistRecord?: (bl: Omit<BlacklistRecord, 'id'>) => void;
+  onUpdateBlacklistRecord?: (bl: BlacklistRecord) => void;
   onDeleteBlacklistRecord?: (id: string) => void;
   // Warehouse Users
   warehouseUsers?: WarehouseUser[];
   onAddWarehouseUser?: (user: Omit<WarehouseUser, 'id'>) => void;
+  onUpdateWarehouseUser?: (user: WarehouseUser) => void;
   onDeleteWarehouseUser?: (id: string) => void;
   // History Nopol dari Surat Jalan
   suratJalanHistory?: SuratJalanRecord[];
@@ -217,9 +219,11 @@ export const MasterItemModal: React.FC<MasterItemModalProps> = ({
   onDeleteMasterWarehouse,
   blacklistRecords = [],
   onAddBlacklistRecord,
+  onUpdateBlacklistRecord,
   onDeleteBlacklistRecord,
   warehouseUsers = [],
   onAddWarehouseUser,
+  onUpdateWarehouseUser,
   onDeleteWarehouseUser,
   suratJalanHistory = []
 }) => {
@@ -305,18 +309,22 @@ export const MasterItemModal: React.FC<MasterItemModalProps> = ({
   // TAB 4: BLACKLIST FORM STATE
   // -------------------------------------------------------------
   const [isBlacklistFormOpen, setIsBlacklistFormOpen] = useState(false);
+  const [editingBlacklistId, setEditingBlacklistId] = useState<string | null>(null);
   const [blTipe, setBlTipe] = useState<'NOPOL' | 'DRIVER' | 'VENDOR' | 'PALLET'>('NOPOL');
   const [blIdentifier, setBlIdentifier] = useState('');
   const [blAlasan, setBlAlasan] = useState('');
+  const [blStatus, setBlStatus] = useState<'ACTIVE' | 'RESOLVED'>('ACTIVE');
   const [blError, setBlError] = useState('');
 
   // -------------------------------------------------------------
   // TAB 5: USER MANAGEMENT FORM STATE
   // -------------------------------------------------------------
   const [isUserFormOpen, setIsUserFormOpen] = useState(false);
+  const [editingUserId, setEditingUserId] = useState<string | null>(null);
   const [usrNama, setUsrNama] = useState('');
   const [usrUsername, setUsrUsername] = useState('');
   const [usrRole, setUsrRole] = useState<'Super Admin' | 'Warehouse Admin' | 'Operator Lapangan' | 'Supervisor'>('Operator Lapangan');
+  const [usrStatus, setUsrStatus] = useState<'Aktif' | 'Nonaktif'>('Aktif');
   const [usrError, setUsrError] = useState('');
 
   // -------------------------------------------------------------
@@ -658,6 +666,30 @@ export const MasterItemModal: React.FC<MasterItemModalProps> = ({
   // -------------------------------------------------------------
   // TAB 4 HANDLERS (BLACKLIST)
   // -------------------------------------------------------------
+  const handleStartAddBlacklist = () => {
+    setEditingBlacklistId(null);
+    setBlTipe('NOPOL');
+    setBlIdentifier('');
+    setBlAlasan('');
+    setBlStatus('ACTIVE');
+    setBlError('');
+    setIsBlacklistFormOpen(true);
+  };
+
+  const handleStartEditBlacklist = (b: BlacklistRecord) => {
+    setEditingBlacklistId(b.id);
+    setBlTipe(b.tipe);
+    setBlIdentifier(
+      b.tipe === 'NOPOL'
+        ? formatNopolPlate(b.identifier) || b.identifier.toUpperCase()
+        : (b.identifier || '').toUpperCase()
+    );
+    setBlAlasan(b.alasan || '');
+    setBlStatus(b.status || 'ACTIVE');
+    setBlError('');
+    setIsBlacklistFormOpen(true);
+  };
+
   const handleSubmitBlacklist = (e: React.FormEvent) => {
     e.preventDefault();
     const cleanIdentifier =
@@ -680,29 +712,42 @@ export const MasterItemModal: React.FC<MasterItemModalProps> = ({
     }
 
     const duplicate = activeBlacklistRecords.find((b) => {
+      if (b.id === editingBlacklistId) return false;
       if (b.tipe !== blTipe) return false;
       if (blTipe === 'NOPOL') {
         return normalizeNopol(b.identifier) === normalizeNopol(cleanIdentifier);
       }
       return b.identifier.trim().toLowerCase() === cleanIdentifier.toLowerCase();
     });
-    if (duplicate) {
+    if (duplicate && blStatus === 'ACTIVE') {
       setBlError(`${blTipe} "${cleanIdentifier}" sudah terdaftar dalam daftar blacklist aktif.`);
       return;
     }
 
     const today = new Date().toLocaleDateString('id-ID');
-    if (onAddBlacklistRecord) {
+    if (editingBlacklistId && onUpdateBlacklistRecord) {
+      const existing = blacklistRecords.find((b) => b.id === editingBlacklistId);
+      onUpdateBlacklistRecord({
+        id: editingBlacklistId,
+        tipe: blTipe,
+        identifier: cleanIdentifier,
+        alasan: cleanAlasan,
+        tanggal: existing?.tanggal || today,
+        status: blStatus
+      });
+    } else if (onAddBlacklistRecord) {
       onAddBlacklistRecord({
         tipe: blTipe,
         identifier: cleanIdentifier,
         alasan: cleanAlasan,
         tanggal: today,
-        status: 'ACTIVE'
+        status: blStatus
       });
     }
+    setEditingBlacklistId(null);
     setBlIdentifier('');
     setBlAlasan('');
+    setBlStatus('ACTIVE');
     setBlError('');
     setIsBlacklistFormOpen(false);
   };
@@ -710,6 +755,26 @@ export const MasterItemModal: React.FC<MasterItemModalProps> = ({
   // -------------------------------------------------------------
   // TAB 5 HANDLERS (USERS)
   // -------------------------------------------------------------
+  const handleStartAddUser = () => {
+    setEditingUserId(null);
+    setUsrNama('');
+    setUsrUsername('');
+    setUsrRole('Operator Lapangan');
+    setUsrStatus('Aktif');
+    setUsrError('');
+    setIsUserFormOpen(true);
+  };
+
+  const handleStartEditUser = (u: WarehouseUser) => {
+    setEditingUserId(u.id);
+    setUsrNama(u.nama || '');
+    setUsrUsername(u.username || '');
+    setUsrRole(u.role || 'Operator Lapangan');
+    setUsrStatus(u.status || 'Aktif');
+    setUsrError('');
+    setIsUserFormOpen(true);
+  };
+
   const handleSubmitUser = (e: React.FormEvent) => {
     e.preventDefault();
     if (!usrNama.trim()) {
@@ -720,16 +785,26 @@ export const MasterItemModal: React.FC<MasterItemModalProps> = ({
       setUsrError('Username wajib diisi.');
       return;
     }
-    if (onAddWarehouseUser) {
+    if (editingUserId && onUpdateWarehouseUser) {
+      onUpdateWarehouseUser({
+        id: editingUserId,
+        nama: usrNama.trim(),
+        username: usrUsername.trim().toLowerCase(),
+        role: usrRole,
+        status: usrStatus
+      });
+    } else if (onAddWarehouseUser) {
       onAddWarehouseUser({
         nama: usrNama.trim(),
         username: usrUsername.trim().toLowerCase(),
         role: usrRole,
-        status: 'Aktif'
+        status: usrStatus
       });
     }
+    setEditingUserId(null);
     setUsrNama('');
     setUsrUsername('');
+    setUsrStatus('Aktif');
     setUsrError('');
     setIsUserFormOpen(false);
   };
@@ -1157,7 +1232,7 @@ export const MasterItemModal: React.FC<MasterItemModalProps> = ({
             {activeMasterTab === 'blacklist' && (
               <button
                 type="button"
-                onClick={() => setIsBlacklistFormOpen(true)}
+                onClick={handleStartAddBlacklist}
                 className="flex items-center gap-2 px-4 py-2.5 text-xs sm:text-sm font-bold rounded-xl bg-rose-600 hover:bg-rose-700 text-white shadow-md shadow-rose-500/20 transition-all cursor-pointer"
               >
                 <Plus className="w-4 h-4" />
@@ -1168,7 +1243,7 @@ export const MasterItemModal: React.FC<MasterItemModalProps> = ({
             {activeMasterTab === 'users' && (
               <button
                 type="button"
-                onClick={() => setIsUserFormOpen(true)}
+                onClick={handleStartAddUser}
                 className="flex items-center gap-2 px-4 py-2.5 text-xs sm:text-sm font-bold rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white shadow-md shadow-indigo-500/20 transition-all cursor-pointer"
               >
                 <Plus className="w-4 h-4" />
@@ -2147,18 +2222,21 @@ export const MasterItemModal: React.FC<MasterItemModalProps> = ({
                 <div className="flex items-center justify-between pb-2 border-b border-rose-200">
                   <div className="font-bold text-sm text-rose-900 flex items-center gap-2">
                     <ShieldAlert className="w-4 h-4 text-rose-600" />
-                    <span>+ Tambah Entri Blacklist</span>
+                    <span>{editingBlacklistId ? 'Edit Entri Blacklist' : '+ Tambah Entri Blacklist'}</span>
                   </div>
                   <button
                     type="button"
-                    onClick={() => setIsBlacklistFormOpen(false)}
+                    onClick={() => {
+                      setIsBlacklistFormOpen(false);
+                      setEditingBlacklistId(null);
+                    }}
                     className="p-1 text-slate-400 hover:text-slate-700"
                   >
                     <X className="w-4 h-4" />
                   </button>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs sm:text-sm">
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4 text-xs sm:text-sm">
                   <div>
                     <label className="block text-xs font-bold text-slate-700 mb-1.5 uppercase">
                       Tipe Entri *
@@ -2206,6 +2284,20 @@ export const MasterItemModal: React.FC<MasterItemModalProps> = ({
                       className="w-full bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs sm:text-sm text-slate-900 focus:outline-none focus:border-rose-500"
                     />
                   </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1.5 uppercase">
+                      Status Blacklist
+                    </label>
+                    <select
+                      value={blStatus}
+                      onChange={(e) => setBlStatus(e.target.value as 'ACTIVE' | 'RESOLVED')}
+                      className="w-full bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs sm:text-sm font-bold text-slate-900 focus:outline-none focus:border-rose-500"
+                    >
+                      <option value="ACTIVE">DIBLOKIR (AKTIF)</option>
+                      <option value="RESOLVED">SELESAI / PULIH</option>
+                    </select>
+                  </div>
                 </div>
 
                 {blError && (
@@ -2218,7 +2310,10 @@ export const MasterItemModal: React.FC<MasterItemModalProps> = ({
                 <div className="flex items-center justify-end gap-2 pt-2">
                   <button
                     type="button"
-                    onClick={() => setIsBlacklistFormOpen(false)}
+                    onClick={() => {
+                      setIsBlacklistFormOpen(false);
+                      setEditingBlacklistId(null);
+                    }}
                     className="px-4 py-2 text-xs font-semibold rounded-xl text-slate-600 hover:bg-slate-200 transition-colors"
                   >
                     Batal
@@ -2227,7 +2322,7 @@ export const MasterItemModal: React.FC<MasterItemModalProps> = ({
                     type="submit"
                     className="px-5 py-2 text-xs sm:text-sm font-extrabold rounded-xl bg-rose-600 hover:bg-rose-700 text-white shadow-md shadow-rose-500/20 transition-all cursor-pointer"
                   >
-                    Simpan ke Blacklist
+                    {editingBlacklistId ? 'Perbarui Blacklist' : 'Simpan ke Blacklist'}
                   </button>
                 </div>
               </form>
@@ -2254,7 +2349,9 @@ export const MasterItemModal: React.FC<MasterItemModalProps> = ({
                         </td>
                       </tr>
                     ) : (
-                      filteredBlacklist.map((b) => (
+                      filteredBlacklist.map((b) => {
+                        const isResolved = b.status === 'RESOLVED';
+                        return (
                         <tr key={b.id} className="hover:bg-rose-50/30 transition-colors">
                           <td className="py-3 px-4">
                             <span className="px-2 py-0.5 rounded font-bold text-[10px] bg-slate-100 text-slate-700 border border-slate-200">
@@ -2271,9 +2368,25 @@ export const MasterItemModal: React.FC<MasterItemModalProps> = ({
                             {b.tanggal}
                           </td>
                           <td className="py-3 px-4 text-center">
-                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-700 border border-rose-200">
-                              DIBLOKIR
-                            </span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (onUpdateBlacklistRecord) {
+                                  onUpdateBlacklistRecord({
+                                    ...b,
+                                    status: isResolved ? 'ACTIVE' : 'RESOLVED'
+                                  });
+                                }
+                              }}
+                              title="Klik untuk mengubah status Aktif / Selesai"
+                              className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold border cursor-pointer transition-colors ${
+                                isResolved
+                                  ? 'bg-emerald-100 text-emerald-700 border-emerald-200 hover:bg-emerald-200'
+                                  : 'bg-rose-100 text-rose-700 border-rose-200 hover:bg-rose-200'
+                              }`}
+                            >
+                              {isResolved ? 'SELESAI' : 'DIBLOKIR'}
+                            </button>
                           </td>
                           <td className="py-3 px-4 text-center">
                             {confirmDeleteId === b.id ? (
@@ -2297,18 +2410,29 @@ export const MasterItemModal: React.FC<MasterItemModalProps> = ({
                                 </button>
                               </div>
                             ) : (
-                              <button
-                                type="button"
-                                onClick={() => setConfirmDeleteId(b.id)}
-                                className="p-1.5 text-red-600 hover:bg-red-100 rounded-lg transition-colors"
-                                title="Hapus Blacklist"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </button>
+                              <div className="flex items-center justify-center gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => handleStartEditBlacklist(b)}
+                                  className="p-1.5 text-blue-600 hover:bg-blue-100 rounded-lg transition-colors"
+                                  title="Edit Blacklist"
+                                >
+                                  <Edit3 className="w-4 h-4" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setConfirmDeleteId(b.id)}
+                                  className="p-1.5 text-red-600 hover:bg-red-100 rounded-lg transition-colors"
+                                  title="Hapus Blacklist"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </div>
                             )}
                           </td>
                         </tr>
-                      ))
+                        );
+                      })
                     )}
                   </tbody>
                 </table>
@@ -2330,18 +2454,21 @@ export const MasterItemModal: React.FC<MasterItemModalProps> = ({
                 <div className="flex items-center justify-between pb-2 border-b border-indigo-200">
                   <div className="font-bold text-sm text-indigo-900 flex items-center gap-2">
                     <Users className="w-4 h-4 text-indigo-600" />
-                    <span>+ Daftarkan Petugas / Akun Baru</span>
+                    <span>{editingUserId ? 'Edit Data Petugas / Akun' : '+ Daftarkan Petugas / Akun Baru'}</span>
                   </div>
                   <button
                     type="button"
-                    onClick={() => setIsUserFormOpen(false)}
+                    onClick={() => {
+                      setIsUserFormOpen(false);
+                      setEditingUserId(null);
+                    }}
                     className="p-1 text-slate-400 hover:text-slate-700"
                   >
                     <X className="w-4 h-4" />
                   </button>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs sm:text-sm">
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4 text-xs sm:text-sm">
                   <div>
                     <label className="block text-xs font-bold text-slate-700 mb-1.5 uppercase">
                       Nama Lengkap Petugas *
@@ -2383,6 +2510,20 @@ export const MasterItemModal: React.FC<MasterItemModalProps> = ({
                       <option value="Super Admin">Super Admin Gudang</option>
                     </select>
                   </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1.5 uppercase">
+                      Status Akun
+                    </label>
+                    <select
+                      value={usrStatus}
+                      onChange={(e) => setUsrStatus(e.target.value as 'Aktif' | 'Nonaktif')}
+                      className="w-full bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs sm:text-sm font-semibold text-slate-900 focus:outline-none focus:border-indigo-500"
+                    >
+                      <option value="Aktif">Aktif</option>
+                      <option value="Nonaktif">Nonaktif</option>
+                    </select>
+                  </div>
                 </div>
 
                 {usrError && (
@@ -2395,7 +2536,10 @@ export const MasterItemModal: React.FC<MasterItemModalProps> = ({
                 <div className="flex items-center justify-end gap-2 pt-2">
                   <button
                     type="button"
-                    onClick={() => setIsUserFormOpen(false)}
+                    onClick={() => {
+                      setIsUserFormOpen(false);
+                      setEditingUserId(null);
+                    }}
                     className="px-4 py-2 text-xs font-semibold rounded-xl text-slate-600 hover:bg-slate-200 transition-colors"
                   >
                     Batal
@@ -2404,7 +2548,7 @@ export const MasterItemModal: React.FC<MasterItemModalProps> = ({
                     type="submit"
                     className="px-5 py-2 text-xs sm:text-sm font-extrabold rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white shadow-md shadow-indigo-500/20 transition-all cursor-pointer"
                   >
-                    Daftarkan Petugas
+                    {editingUserId ? 'Perbarui Petugas' : 'Daftarkan Petugas'}
                   </button>
                 </div>
               </form>
@@ -2430,7 +2574,9 @@ export const MasterItemModal: React.FC<MasterItemModalProps> = ({
                         </td>
                       </tr>
                     ) : (
-                      filteredUsers.map((u) => (
+                      filteredUsers.map((u) => {
+                        const isActive = (u.status || 'Aktif') === 'Aktif';
+                        return (
                         <tr key={u.id} className="hover:bg-indigo-50/30 transition-colors">
                           <td className="py-3 px-4 font-extrabold text-slate-900">
                             {u.nama}
@@ -2444,9 +2590,25 @@ export const MasterItemModal: React.FC<MasterItemModalProps> = ({
                             </span>
                           </td>
                           <td className="py-3 px-4 text-center">
-                            <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (onUpdateWarehouseUser) {
+                                  onUpdateWarehouseUser({
+                                    ...u,
+                                    status: isActive ? 'Nonaktif' : 'Aktif'
+                                  });
+                                }
+                              }}
+                              title="Klik untuk ubah status Aktif / Nonaktif"
+                              className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold cursor-pointer transition-colors ${
+                                isActive
+                                  ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200'
+                                  : 'bg-slate-200 text-slate-600 hover:bg-slate-300'
+                              }`}
+                            >
                               {u.status || 'Aktif'}
-                            </span>
+                            </button>
                           </td>
                           <td className="py-3 px-4 text-center">
                             {confirmDeleteId === u.id ? (
@@ -2470,18 +2632,29 @@ export const MasterItemModal: React.FC<MasterItemModalProps> = ({
                                 </button>
                               </div>
                             ) : (
-                              <button
-                                type="button"
-                                onClick={() => setConfirmDeleteId(u.id)}
-                                className="p-1.5 text-red-600 hover:bg-red-100 rounded-lg transition-colors"
-                                title="Hapus Akun Petugas"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </button>
+                              <div className="flex items-center justify-center gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => handleStartEditUser(u)}
+                                  className="p-1.5 text-blue-600 hover:bg-blue-100 rounded-lg transition-colors"
+                                  title="Edit Petugas"
+                                >
+                                  <Edit3 className="w-4 h-4" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setConfirmDeleteId(u.id)}
+                                  className="p-1.5 text-red-600 hover:bg-red-100 rounded-lg transition-colors"
+                                  title="Hapus Akun Petugas"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </div>
                             )}
                           </td>
                         </tr>
-                      ))
+                        );
+                      })
                     )}
                   </tbody>
                 </table>

@@ -314,9 +314,7 @@ export function subscribeToMasterItems(
           items.push({ ...raw, id: raw.id || docSnap.id });
         }
       });
-      if (items.length > 0) {
-        onUpdate(items);
-      }
+      onUpdate(items);
     },
     (error) => {
       console.error('Snapshot error for master_items:', error);
@@ -342,6 +340,7 @@ export async function saveMasterItem(item: MasterItem): Promise<void> {
  * Save multiple master items in Firestore (batch seed)
  */
 export async function seedMasterItems(items: MasterItem[]): Promise<void> {
+  if (items.length === 0) return;
   try {
     const batch = writeBatch(db);
     items.forEach((item) => {
@@ -386,9 +385,7 @@ export function subscribeToMasterRoutes(
           routes.push({ ...raw, id: raw.id || docSnap.id });
         }
       });
-      if (routes.length > 0) {
-        onUpdate(routes);
-      }
+      onUpdate(routes);
     },
     (error) => {
       console.error('Snapshot error for master_routes:', error);
@@ -408,6 +405,7 @@ export async function saveMasterRoute(route: import('../types/warehouse').Master
 }
 
 export async function seedMasterRoutes(routes: import('../types/warehouse').MasterRoute[]): Promise<void> {
+  if (routes.length === 0) return;
   try {
     const batch = writeBatch(db);
     routes.forEach((route) => {
@@ -445,9 +443,7 @@ export function subscribeToMasterVendors(
           vendors.push({ ...raw, id: raw.id || docSnap.id });
         }
       });
-      if (vendors.length > 0) {
-        onUpdate(vendors);
-      }
+      onUpdate(vendors);
     },
     (error) => {
       console.error('Snapshot error for master_vendors:', error);
@@ -467,6 +463,7 @@ export async function saveMasterVendor(vendor: import('../types/warehouse').Mast
 }
 
 export async function seedMasterVendors(vendors: import('../types/warehouse').MasterVendor[]): Promise<void> {
+  if (vendors.length === 0) return;
   try {
     const batch = writeBatch(db);
     vendors.forEach((vendor) => {
@@ -589,9 +586,7 @@ export function subscribeToMasterTariffs(
           items.push({ ...raw, id: raw.id || docSnap.id });
         }
       });
-      if (items.length > 0) {
-        onUpdate(items);
-      }
+      onUpdate(items);
     },
     (error) => {
       console.error('Snapshot error for master_route_tariffs:', error);
@@ -608,6 +603,21 @@ export async function saveMasterTariff(
     await setDoc(doc(db, TARIFFS_COLLECTION, tariff.id), sanitizeForFirestore(tariff));
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, `${TARIFFS_COLLECTION}/${tariff.id}`);
+  }
+}
+
+export async function seedMasterTariffs(
+  tariffs: import('../types/warehouse').MasterRouteTariff[]
+): Promise<void> {
+  if (tariffs.length === 0) return;
+  try {
+    const batch = writeBatch(db);
+    tariffs.forEach((t) => {
+      batch.set(doc(db, TARIFFS_COLLECTION, t.id), sanitizeForFirestore(t));
+    });
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, TARIFFS_COLLECTION);
   }
 }
 
@@ -634,13 +644,11 @@ export function subscribeToBlacklist(
       const items: import('../types/warehouse').BlacklistRecord[] = [];
       snapshot.forEach((docSnap) => {
         const data = docSnap.data() as import('../types/warehouse').BlacklistRecord;
-        if (data && data.id) {
-          items.push(data);
+        if (data) {
+          items.push({ ...data, id: data.id || docSnap.id });
         }
       });
-      if (items.length > 0) {
-        onUpdate(items);
-      }
+      onUpdate(items);
     },
     (error) => {
       console.error('Snapshot error for master_blacklist:', error);
@@ -657,6 +665,21 @@ export async function saveBlacklistRecord(
     await setDoc(doc(db, BLACKLIST_COLLECTION, record.id), sanitizeForFirestore(record));
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, `${BLACKLIST_COLLECTION}/${record.id}`);
+  }
+}
+
+export async function seedBlacklistRecords(
+  records: import('../types/warehouse').BlacklistRecord[]
+): Promise<void> {
+  if (records.length === 0) return;
+  try {
+    const batch = writeBatch(db);
+    records.forEach((r) => {
+      batch.set(doc(db, BLACKLIST_COLLECTION, r.id), sanitizeForFirestore(r));
+    });
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, BLACKLIST_COLLECTION);
   }
 }
 
@@ -683,13 +706,11 @@ export function subscribeToWarehouseUsers(
       const items: import('../types/warehouse').WarehouseUser[] = [];
       snapshot.forEach((docSnap) => {
         const data = docSnap.data() as import('../types/warehouse').WarehouseUser;
-        if (data && data.id) {
-          items.push(data);
+        if (data) {
+          items.push({ ...data, id: data.id || docSnap.id });
         }
       });
-      if (items.length > 0) {
-        onUpdate(items);
-      }
+      onUpdate(items);
     },
     (error) => {
       console.error('Snapshot error for warehouse_users:', error);
@@ -706,6 +727,21 @@ export async function saveWarehouseUser(
     await setDoc(doc(db, USERS_COLLECTION, user.id), sanitizeForFirestore(user));
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, `${USERS_COLLECTION}/${user.id}`);
+  }
+}
+
+export async function seedWarehouseUsers(
+  users: import('../types/warehouse').WarehouseUser[]
+): Promise<void> {
+  if (users.length === 0) return;
+  try {
+    const batch = writeBatch(db);
+    users.forEach((u) => {
+      batch.set(doc(db, USERS_COLLECTION, u.id), sanitizeForFirestore(u));
+    });
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, USERS_COLLECTION);
   }
 }
 
@@ -736,9 +772,7 @@ export function subscribeToMasterWarehouses(
           items.push({ ...raw, id: raw.id || docSnap.id });
         }
       });
-      if (items.length > 0) {
-        onUpdate(items);
-      }
+      onUpdate(items);
     },
     (error) => {
       console.error('Snapshot error for master_warehouses:', error);
@@ -767,9 +801,58 @@ export async function deleteMasterWarehouse(warehouseId: string): Promise<void> 
 }
 
 // -------------------------------------------------------------
-// GOOGLE SHEETS BRIDGE SETTINGS (SHARED ACROSS ALL DEVICES)
+// MASTER REGISTRY METADATA (SHARED DELETIONS & TOUCHED FLAGS ACROSS DEVICES)
 // -------------------------------------------------------------
 const APP_SETTINGS_COLLECTION = 'test';
+const MASTER_META_DOC_ID = 'master_registry_meta_v1';
+
+export type MasterCollectionKey =
+  | 'items'
+  | 'routes'
+  | 'vendors'
+  | 'tariffs'
+  | 'warehouses'
+  | 'blacklist'
+  | 'users';
+
+export interface MasterRegistryMeta {
+  deletedIds: Partial<Record<MasterCollectionKey, string[]>>;
+  touched: Partial<Record<MasterCollectionKey, boolean>>;
+  updatedAt: string;
+}
+
+export function subscribeToMasterRegistryMeta(
+  onUpdate: (meta: MasterRegistryMeta | null) => void
+): () => void {
+  const ref = doc(db, APP_SETTINGS_COLLECTION, MASTER_META_DOC_ID);
+  const unsubscribe = onSnapshot(
+    ref,
+    (docSnap) => {
+      if (docSnap.exists()) {
+        onUpdate(docSnap.data() as MasterRegistryMeta);
+      } else {
+        onUpdate(null);
+      }
+    },
+    (error) => {
+      console.error('Snapshot error for master_registry_meta:', error);
+    }
+  );
+  return unsubscribe;
+}
+
+export async function saveMasterRegistryMeta(meta: MasterRegistryMeta): Promise<void> {
+  try {
+    const ref = doc(db, APP_SETTINGS_COLLECTION, MASTER_META_DOC_ID);
+    await setDoc(ref, sanitizeForFirestore(meta));
+  } catch (error) {
+    console.error('Failed to save master registry meta:', error);
+  }
+}
+
+// -------------------------------------------------------------
+// GOOGLE SHEETS BRIDGE SETTINGS (SHARED ACROSS ALL DEVICES)
+// -------------------------------------------------------------
 const SHEETS_BRIDGE_DOC_ID = 'google_sheets_bridge';
 
 export type SheetsSyncMode = 'apps_script' | 'oauth';

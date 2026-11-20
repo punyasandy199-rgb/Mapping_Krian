@@ -75,25 +75,34 @@ import {
   subscribeToMasterRoutes,
   saveMasterRoute,
   deleteMasterRoute,
+  seedMasterRoutes,
   subscribeToMasterVendors,
   saveMasterVendor,
   deleteMasterVendor,
+  seedMasterVendors,
   subscribeToMasterTariffs,
   saveMasterTariff,
   deleteMasterTariff,
+  seedMasterTariffs,
   subscribeToMasterWarehouses,
   saveMasterWarehouse,
   deleteMasterWarehouse,
   subscribeToBlacklist,
   saveBlacklistRecord,
   deleteBlacklistRecord,
+  seedBlacklistRecords,
   subscribeToWarehouseUsers,
   saveWarehouseUser,
   deleteWarehouseUser,
+  seedWarehouseUsers,
   subscribeToSuratJalanRecords,
   saveSuratJalanRecord,
   updateSuratJalanRecord,
   deleteSuratJalanRecord,
+  MasterCollectionKey,
+  MasterRegistryMeta,
+  subscribeToMasterRegistryMeta,
+  saveMasterRegistryMeta,
   SheetsSyncMode,
   SheetsBridgeConfig,
   subscribeToSheetsBridgeConfig,
@@ -144,6 +153,18 @@ const DELETED_TARIFFS_KEY = 'pallettrack_deleted_master_tariffs_v1';
 const DELETED_WAREHOUSES_KEY = 'pallettrack_deleted_warehouses_v1';
 const DELETED_BLACKLIST_KEY = 'pallettrack_deleted_blacklist_v1';
 const DELETED_USERS_KEY = 'pallettrack_deleted_users_v1';
+const ACTIVE_OPERATOR_STORAGE_KEY = 'pallettrack_active_operator_v1';
+const MASTER_SYNC_CHANNEL = 'pallettrack_master_sync_v1';
+
+const DELETED_KEY_MAP: Record<MasterCollectionKey, string> = {
+  items: DELETED_ITEMS_KEY,
+  routes: DELETED_ROUTES_KEY,
+  vendors: DELETED_VENDORS_KEY,
+  tariffs: DELETED_TARIFFS_KEY,
+  warehouses: DELETED_WAREHOUSES_KEY,
+  blacklist: DELETED_BLACKLIST_KEY,
+  users: DELETED_USERS_KEY
+};
 
 function getDeletedIds(key: string): Set<string> {
   try {
@@ -157,7 +178,19 @@ function getDeletedIds(key: string): Set<string> {
 function recordDeletedId(key: string, id: string) {
   const set = getDeletedIds(key);
   set.add(id);
-  localStorage.setItem(key, JSON.stringify(Array.from(set)));
+  try {
+    localStorage.setItem(key, JSON.stringify(Array.from(set)));
+  } catch {}
+}
+
+function broadcastMasterSync(scope: string = 'all') {
+  try {
+    if (typeof BroadcastChannel !== 'undefined') {
+      const ch = new BroadcastChannel(MASTER_SYNC_CHANNEL);
+      ch.postMessage({ scope, ts: Date.now() });
+      ch.close();
+    }
+  } catch {}
 }
 
 // Initial Data Loaders
@@ -437,11 +470,42 @@ export default function App() {
   );
   const [blacklistRecords, setBlacklistRecords] = useState<BlacklistRecord[]>(loadSavedBlacklist);
   const [warehouseUsers, setWarehouseUsers] = useState<WarehouseUser[]>(loadSavedWarehouseUsers);
+  const [activeOperatorId, setActiveOperatorId] = useState<string>(() => {
+    try {
+      return localStorage.getItem(ACTIVE_OPERATOR_STORAGE_KEY) || '';
+    } catch {
+      return '';
+    }
+  });
 
   // Operational State
   const [suratJalanHistory, setSuratJalanHistory] = useState<SuratJalanRecord[]>(loadSavedSuratJalan);
   const [records, setRecords] = useState<PalletRecord[]>(loadSavedRecords);
   const [currentBatch, setCurrentBatch] = useState<BatchSubmission | null>(null);
+
+  // Shared Cloud Metadata & Latest Snapshots for atomic master reconciliation across devices
+  const cloudMetaRef = useRef<MasterRegistryMeta>({
+    deletedIds: {},
+    touched: {},
+    updatedAt: ''
+  });
+  const latestCloudRef = useRef<{
+    items: MasterItem[] | null;
+    routes: MasterRoute[] | null;
+    vendors: MasterVendor[] | null;
+    tariffs: MasterRouteTariff[] | null;
+    warehouses: MasterWarehouse[] | null;
+    blacklist: BlacklistRecord[] | null;
+    users: WarehouseUser[] | null;
+  }>({
+    items: null,
+    routes: null,
+    vendors: null,
+    tariffs: null,
+    warehouses: null,
+    blacklist: null,
+    users: null
+  });
 
   // Modals & Controls
   const [isScannerOpen, setIsScannerOpen] = useState(false);
@@ -513,8 +577,143 @@ export default function App() {
     }
   }, [isDarkMode]);
 
+  const getMergedDeletedSet = useCallback((key: MasterCollectionKey): Set<string> => {
+    const localSet = getDeletedIds(DELETED_KEY_MAP[key]);
+    const cloudList = cloudMetaRef.current.deletedIds?.[key] || [];
+    const merged = new Set<string>(localSet);
+    cloudList.forEach((id) => merged.add(id));
+    if (merged.size > localSet.size) {
+      try {
+        localStorage.setItem(DELETED_KEY_MAP[key], JSON.stringify(Array.from(merged)));
+      } catch {}
+    }
+    return merged;
+  }, []);
+
+  const persistMasterMeta = useCallback(
+    (key: MasterCollectionKey, opts?: { addDeletedId?: string; markTouched?: boolean }) => {
+      const current = cloudMetaRef.current;
+      const mergedDeleted = new Set<string>(current.deletedIds?.[key] || []);
+      getDeletedIds(DELETED_KEY_MAP[key]).forEach((id) => mergedDeleted.add(id));
+      if (opts?.addDeletedId) {
+        mergedDeleted.add(opts.addDeletedId);
+        recordDeletedId(DELETED_KEY_MAP[key], opts.addDeletedId);
+      }
+
+      const nextMeta: MasterRegistryMeta = {
+        deletedIds: {
+          ...(current.deletedIds || {}),
+          [key]: Array.from(mergedDeleted)
+        },
+        touched: {
+          ...(current.touched || {}),
+          ...(opts?.markTouched ? { [key]: true } : {})
+        },
+        updatedAt: new Date().toISOString()
+      };
+      cloudMetaRef.current = nextMeta;
+      saveMasterRegistryMeta(nextMeta).catch(() => {});
+    },
+    []
+  );
+
+  const reconcileMasterCollection = useCallback(
+    (key?: MasterCollectionKey) => {
+      const shouldSync = (target: MasterCollectionKey) => !key || key === target;
+      const cloud = latestCloudRef.current;
+      const touched = cloudMetaRef.current.touched || {};
+
+      if (shouldSync('items') && cloud.items !== null) {
+        const deleted = getMergedDeletedSet('items');
+        const map = new Map<string, MasterItem>();
+        DEFAULT_MASTER_ITEMS.filter((i) => !deleted.has(i.id)).forEach((i) => map.set(i.id, i));
+        cloud.items.filter((i) => !deleted.has(i.id)).forEach((i) => map.set(i.id, i));
+        setMasterItems(Array.from(map.values()));
+      }
+
+      if (shouldSync('routes') && cloud.routes !== null) {
+        const deleted = getMergedDeletedSet('routes');
+        setMasterRoutes(
+          deduplicateMasterRoutes([
+            ...DEFAULT_MASTER_ROUTES.filter((r) => !deleted.has(r.id)),
+            ...cloud.routes.filter((r) => !deleted.has(r.id))
+          ])
+        );
+      }
+
+      if (shouldSync('vendors') && cloud.vendors !== null) {
+        const deleted = getMergedDeletedSet('vendors');
+        if (cloud.vendors.length > 0 || touched.vendors) {
+          setMasterVendors(cloud.vendors.filter((v) => !deleted.has(v.id)));
+        } else {
+          setMasterVendors(DEFAULT_MASTER_VENDORS.filter((v) => !deleted.has(v.id)));
+        }
+      }
+
+      if (shouldSync('tariffs') && cloud.tariffs !== null) {
+        const deleted = getMergedDeletedSet('tariffs');
+        if (cloud.tariffs.length > 0 || touched.tariffs) {
+          setMasterTariffs(cloud.tariffs.filter((t) => !deleted.has(t.id)));
+        } else {
+          setMasterTariffs(DEFAULT_MASTER_ROUTE_TARIFFS.filter((t) => !deleted.has(t.id)));
+        }
+      }
+
+      if (shouldSync('blacklist') && cloud.blacklist !== null) {
+        const deleted = getMergedDeletedSet('blacklist');
+        if (cloud.blacklist.length > 0 || touched.blacklist) {
+          setBlacklistRecords(cloud.blacklist.filter((b) => !deleted.has(b.id)));
+        } else {
+          setBlacklistRecords(DEFAULT_BLACKLIST_RECORDS.filter((b) => !deleted.has(b.id)));
+        }
+      }
+
+      if (shouldSync('users') && cloud.users !== null) {
+        const deleted = getMergedDeletedSet('users');
+        if (cloud.users.length > 0 || touched.users) {
+          setWarehouseUsers(cloud.users.filter((u) => !deleted.has(u.id)));
+        } else {
+          setWarehouseUsers(DEFAULT_WAREHOUSE_USERS.filter((u) => !deleted.has(u.id)));
+        }
+      }
+
+      if (shouldSync('warehouses') && cloud.warehouses !== null) {
+        const deleted = getMergedDeletedSet('warehouses');
+        const map = new Map<string, MasterWarehouse>();
+        DEFAULT_MASTER_WAREHOUSES.filter((w) => !deleted.has(w.id)).forEach((w) =>
+          map.set(w.id, w)
+        );
+        cloud.warehouses.filter((w) => !deleted.has(w.id)).forEach((w) => map.set(w.id, w));
+        setMasterWarehouses(Array.from(map.values()));
+      }
+    },
+    [getMergedDeletedSet]
+  );
+
   // Real-time synchronization with Cloud Firestore
   useEffect(() => {
+    // 0. Subscribe to Shared Master Registry Metadata (cross-device deletions & touched flags)
+    const unsubscribeMeta = subscribeToMasterRegistryMeta((meta) => {
+      if (!meta) return;
+      cloudMetaRef.current = {
+        deletedIds: meta.deletedIds || {},
+        touched: meta.touched || {},
+        updatedAt: meta.updatedAt || ''
+      };
+      // Sinkronkan deletedIds ke localStorage lokal
+      (Object.keys(DELETED_KEY_MAP) as MasterCollectionKey[]).forEach((k) => {
+        const incoming = meta.deletedIds?.[k] || [];
+        if (incoming.length > 0) {
+          const merged = new Set<string>(getDeletedIds(DELETED_KEY_MAP[k]));
+          incoming.forEach((id) => merged.add(id));
+          try {
+            localStorage.setItem(DELETED_KEY_MAP[k], JSON.stringify(Array.from(merged)));
+          } catch {}
+        }
+      });
+      reconcileMasterCollection();
+    });
+
     // 1. Subscribe to Pallet Records
     const unsubscribeRecords = subscribeToPalletRecords(
       (cloudRecords) => {
@@ -527,87 +726,55 @@ export default function App() {
       (error) => console.warn('Real-time pallet listener:', error)
     );
 
-    // 2. Subscribe to Master Items (with deletion protection)
+    // 2. Subscribe to Master Items (direct reconciliation, no stale prev accumulation)
     const unsubscribeMaster = subscribeToMasterItems((cloudMaster) => {
-      const deleted = getDeletedIds(DELETED_ITEMS_KEY);
-      if (cloudMaster && cloudMaster.length > 0) {
-        setMasterItems((prev) => {
-          const map = new Map<string, MasterItem>();
-          DEFAULT_MASTER_ITEMS.filter((i) => !deleted.has(i.id)).forEach((i) => map.set(i.id, i));
-          prev.filter((i) => !deleted.has(i.id)).forEach((i) => map.set(i.id, i));
-          cloudMaster.filter((i) => !deleted.has(i.id)).forEach((i) => map.set(i.id, i));
-          return Array.from(map.values());
-        });
-      }
+      latestCloudRef.current.items = cloudMaster || [];
+      reconcileMasterCollection('items');
     });
 
     // 3. Subscribe to Master Routes
     const unsubscribeRoutes = subscribeToMasterRoutes((cloudRoutes) => {
-      const deleted = getDeletedIds(DELETED_ROUTES_KEY);
-      if (cloudRoutes && cloudRoutes.length > 0) {
-        setMasterRoutes((prev) =>
-          deduplicateMasterRoutes([
-            ...DEFAULT_MASTER_ROUTES.filter((r) => !deleted.has(r.id)),
-            ...prev.filter((r) => !deleted.has(r.id)),
-            ...cloudRoutes.filter((r) => !deleted.has(r.id))
-          ])
-        );
-      }
+      latestCloudRef.current.routes = cloudRoutes || [];
+      reconcileMasterCollection('routes');
     });
 
-    // 4. Subscribe to Master Vendors (use Firestore cloud data directly when present)
+    // 4. Subscribe to Master Vendors
     const unsubscribeVendors = subscribeToMasterVendors((cloudVendors) => {
-      const deleted = getDeletedIds(DELETED_VENDORS_KEY);
-      if (cloudVendors && cloudVendors.length > 0) {
-        setMasterVendors(cloudVendors.filter((v) => !deleted.has(v.id)));
-      }
+      latestCloudRef.current.vendors = cloudVendors || [];
+      reconcileMasterCollection('vendors');
     });
 
     // 5. Subscribe to Master Tariffs (Tujuan & Tarif)
     const unsubscribeTariffs = subscribeToMasterTariffs((cloudTariffs) => {
-      const deleted = getDeletedIds(DELETED_TARIFFS_KEY);
-      if (cloudTariffs && cloudTariffs.length > 0) {
-        setMasterTariffs(cloudTariffs.filter((t) => !deleted.has(t.id)));
-      }
+      latestCloudRef.current.tariffs = cloudTariffs || [];
+      reconcileMasterCollection('tariffs');
     });
 
     // 6. Subscribe to Blacklist
     const unsubscribeBlacklist = subscribeToBlacklist((cloudBlacklist) => {
-      const deleted = getDeletedIds(DELETED_BLACKLIST_KEY);
-      if (cloudBlacklist && cloudBlacklist.length > 0) {
-        setBlacklistRecords(cloudBlacklist.filter((b) => !deleted.has(b.id)));
-      }
+      latestCloudRef.current.blacklist = cloudBlacklist || [];
+      reconcileMasterCollection('blacklist');
     });
 
     // 7. Subscribe to Warehouse Users
     const unsubscribeUsers = subscribeToWarehouseUsers((cloudUsers) => {
-      const deleted = getDeletedIds(DELETED_USERS_KEY);
-      if (cloudUsers && cloudUsers.length > 0) {
-        setWarehouseUsers(cloudUsers.filter((u) => !deleted.has(u.id)));
-      }
+      latestCloudRef.current.users = cloudUsers || [];
+      reconcileMasterCollection('users');
     });
 
     // 8. Subscribe to Surat Jalan Records
     const unsubscribeSuratJalan = subscribeToSuratJalanRecords((cloudSurat) => {
-      if (cloudSurat && cloudSurat.length > 0) {
-        setSuratJalanHistory(cloudSurat);
+      if (cloudSurat) {
+        setSuratJalanHistory(
+          cloudSurat.filter((sj) => sj && !PURGED_SURAT_JALAN_IDS.has(sj.id))
+        );
       }
     });
 
     // 9. Subscribe to Master Warehouses (Lokasi & Sub-Lokasi Gudang)
     const unsubscribeWarehouses = subscribeToMasterWarehouses((cloudWarehouses) => {
-      const deleted = getDeletedIds(DELETED_WAREHOUSES_KEY);
-      if (cloudWarehouses && cloudWarehouses.length > 0) {
-        setMasterWarehouses((prev) => {
-          const map = new Map<string, MasterWarehouse>();
-          DEFAULT_MASTER_WAREHOUSES.filter((w) => !deleted.has(w.id)).forEach((w) =>
-            map.set(w.id, w)
-          );
-          prev.filter((w) => !deleted.has(w.id)).forEach((w) => map.set(w.id, w));
-          cloudWarehouses.filter((w) => !deleted.has(w.id)).forEach((w) => map.set(w.id, w));
-          return Array.from(map.values());
-        });
-      }
+      latestCloudRef.current.warehouses = cloudWarehouses || [];
+      reconcileMasterCollection('warehouses');
     });
 
     // 10. Subscribe to Shared Google Sheets Bridge Settings (for 24/7 no-login operator sync)
@@ -641,6 +808,7 @@ export default function App() {
     });
 
     return () => {
+      unsubscribeMeta();
       unsubscribeRecords();
       unsubscribeMaster();
       unsubscribeRoutes();
@@ -652,7 +820,80 @@ export default function App() {
       unsubscribeWarehouses();
       unsubscribeBridge();
     };
+  }, [reconcileMasterCollection]);
+
+  // Same-browser Multi-Tab real-time sync (storage event + BroadcastChannel)
+  useEffect(() => {
+    const syncFromLocalStorage = (key?: string | null) => {
+      if (!key || key === MASTER_STORAGE_KEYS[0] || key === DELETED_ITEMS_KEY) {
+        setMasterItems(loadSavedMasterItems());
+      }
+      if (!key || key === ROUTE_STORAGE_KEYS[0] || key === DELETED_ROUTES_KEY) {
+        setMasterRoutes(loadSavedMasterRoutes());
+      }
+      if (!key || key === VENDOR_STORAGE_KEYS[0] || key === DELETED_VENDORS_KEY) {
+        setMasterVendors(loadSavedMasterVendors());
+      }
+      if (!key || key === TARIFF_STORAGE_KEYS[0] || key === DELETED_TARIFFS_KEY) {
+        setMasterTariffs(loadSavedMasterTariffs());
+      }
+      if (!key || key === WAREHOUSE_STORAGE_KEYS[0] || key === DELETED_WAREHOUSES_KEY) {
+        setMasterWarehouses(loadSavedMasterWarehouses());
+      }
+      if (!key || key === BLACKLIST_STORAGE_KEYS[0] || key === DELETED_BLACKLIST_KEY) {
+        setBlacklistRecords(loadSavedBlacklist());
+      }
+      if (!key || key === USER_STORAGE_KEYS[0] || key === DELETED_USERS_KEY) {
+        setWarehouseUsers(loadSavedWarehouseUsers());
+      }
+      if (!key || key === RECORD_STORAGE_KEYS[0]) {
+        setRecords(loadSavedRecords());
+      }
+      if (!key || key === SURAT_STORAGE_KEYS[0]) {
+        setSuratJalanHistory(loadSavedSuratJalan());
+      }
+      if (!key || key === ACTIVE_OPERATOR_STORAGE_KEY) {
+        try {
+          setActiveOperatorId(localStorage.getItem(ACTIVE_OPERATOR_STORAGE_KEY) || '');
+        } catch {}
+      }
+    };
+
+    const handleStorage = (e: StorageEvent) => {
+      syncFromLocalStorage(e.key);
+    };
+    window.addEventListener('storage', handleStorage);
+
+    let bc: BroadcastChannel | null = null;
+    try {
+      if (typeof BroadcastChannel !== 'undefined') {
+        bc = new BroadcastChannel(MASTER_SYNC_CHANNEL);
+        bc.onmessage = () => {
+          syncFromLocalStorage(null);
+        };
+      }
+    } catch {}
+
+    return () => {
+      window.removeEventListener('storage', handleStorage);
+      if (bc) {
+        try {
+          bc.close();
+        } catch {}
+      }
+    };
   }, []);
+
+  // Keep active warehouse selection synced when User Management edits or deletes warehouses
+  useEffect(() => {
+    if (!activeWarehouseId) return;
+    const matched = masterWarehouses.find((w) => w.id === activeWarehouseId);
+    if (!matched) {
+      setActiveWarehouseId(null);
+    } else if (matched.locationGroup !== portalLocationGroup) {
+      setPortalLocationGroup(matched.locationGroup);
+    }
+  }, [masterWarehouses, activeWarehouseId, portalLocationGroup]);
 
   // Persist local caches
   useEffect(() => {
@@ -696,6 +937,26 @@ export default function App() {
       localStorage.setItem(WAREHOUSE_STORAGE_KEYS[0], JSON.stringify(masterWarehouses));
     } catch (e) {}
   }, [masterWarehouses]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(BLACKLIST_STORAGE_KEYS[0], JSON.stringify(blacklistRecords));
+    } catch (e) {}
+  }, [blacklistRecords]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(USER_STORAGE_KEYS[0], JSON.stringify(warehouseUsers));
+    } catch (e) {}
+  }, [warehouseUsers]);
+
+  useEffect(() => {
+    try {
+      if (activeOperatorId) {
+        localStorage.setItem(ACTIVE_OPERATOR_STORAGE_KEY, activeOperatorId);
+      }
+    } catch (e) {}
+  }, [activeOperatorId]);
 
   useEffect(() => {
     try {
@@ -1020,19 +1281,126 @@ export default function App() {
     };
     setMasterItems((prev) => [item, ...prev]);
     saveMasterItem(item).catch((err) => console.error('Cloud save item error:', err));
+    broadcastMasterSync('items');
   };
 
   const handleUpdateMasterItem = (updatedItem: MasterItem) => {
+    const oldItem = masterItems.find((i) => i.id === updatedItem.id);
+    const oldKode = (oldItem?.kodeItem || updatedItem.kodeItem).trim().toUpperCase();
+    const oldNama = (oldItem?.namaBarang || updatedItem.namaBarang).trim().toUpperCase();
+    const newKode = updatedItem.kodeItem.trim().toUpperCase();
+    const newNama = updatedItem.namaBarang.trim();
+    const newNamaUpper = newNama.toUpperCase();
+    const newUnit = updatedItem.satuan || 'Box';
+    const newBerat = updatedItem.beratPerBoxKg ?? 30;
+    const nowIso = new Date().toISOString();
+
     setMasterItems((prev) =>
       prev.map((item) => (item.id === updatedItem.id ? updatedItem : item))
     );
     saveMasterItem(updatedItem).catch((err) => console.error('Cloud update item error:', err));
+
+    // Otomatis cascade perubahan Master Barang ke data pallet berjalan & batch aktif
+    const changedPallets: PalletRecord[] = [];
+    const nextRecords = records.map((r) => {
+      const rKode = (r.kodeItem || '').trim().toUpperCase();
+      const matches = rKode === oldKode || rKode === newKode;
+      if (!matches) return r;
+      if (rKode === newKode && r.namaBarang === newNama && r.unit === newUnit) {
+        return r;
+      }
+      const nextRec: PalletRecord = {
+        ...r,
+        kodeItem: newKode,
+        namaBarang: newNama,
+        unit: newUnit,
+        updatedAt: nowIso,
+        lastUpdateAction: `Sync Master Barang (${newKode})`
+      };
+      changedPallets.push(nextRec);
+      return nextRec;
+    });
+    if (changedPallets.length > 0) {
+      setRecords(nextRecords);
+      const changedMap = new Map(changedPallets.map((p) => [p.id, p]));
+      setCurrentBatch((prev) => {
+        if (!prev) return prev;
+        const hasMatch = prev.items.some((i) => changedMap.has(i.id));
+        if (!hasMatch) return prev;
+        return {
+          ...prev,
+          items: prev.items.map((i) => changedMap.get(i.id) || i)
+        };
+      });
+      Promise.all(
+        changedPallets.map((p) => updatePalletRecord(p).catch(() => undefined))
+      );
+    }
+
+    // Otomatis cascade perubahan Master Barang ke Surat Jalan yang sudah terbit
+    const changedSuratJalans: SuratJalanRecord[] = [];
+    const nextSjs = suratJalanHistory.map((sj) => {
+      if (!sj.itemsSummary || sj.itemsSummary.length === 0) return sj;
+      let sjModified = false;
+      const nextSummary = sj.itemsSummary.map((line) => {
+        const lKode = (line.kodeItem || '').trim().toUpperCase();
+        const lNama = (line.namaBarang || '').trim().toUpperCase();
+        const matches =
+          (lKode && lKode !== '-' && (lKode === oldKode || lKode === newKode)) ||
+          (lNama && (lNama === oldNama || lNama === newNamaUpper));
+        if (!matches) return line;
+        const nextTotalKg = Math.round((Number(line.qtyBox) || 0) * newBerat * 100) / 100;
+        const nextDetail = `${newKode} (1 X ${newBerat} KG)`;
+        if (
+          lKode === newKode &&
+          lNama === newNamaUpper &&
+          line.beratPerBoxKg === newBerat &&
+          line.totalKg === nextTotalKg &&
+          line.detailBarang === nextDetail
+        ) {
+          return line;
+        }
+        sjModified = true;
+        return {
+          ...line,
+          kodeItem: newKode,
+          namaBarang: newNamaUpper,
+          detailBarang: nextDetail,
+          beratPerBoxKg: newBerat,
+          totalKg: nextTotalKg
+        };
+      });
+      if (!sjModified) return sj;
+      const nextGrandKg =
+        Math.round(nextSummary.reduce((sum, l) => sum + (Number(l.totalKg) || 0), 0) * 100) / 100;
+      const nextSj: SuratJalanRecord = {
+        ...sj,
+        itemsSummary: nextSummary,
+        grandTotalKg: nextGrandKg,
+        updatedAt: nowIso,
+        lastUpdateAction: `Sync Master Barang (${newKode})`
+      };
+      changedSuratJalans.push(nextSj);
+      return nextSj;
+    });
+    if (changedSuratJalans.length > 0) {
+      setSuratJalanHistory(nextSjs);
+      Promise.all(
+        changedSuratJalans.map((sj) => updateSuratJalanRecord(sj).catch(() => undefined))
+      );
+    }
+
+    if (changedPallets.length > 0 || changedSuratJalans.length > 0) {
+      setLocalMutationVersion((v) => v + 1);
+    }
+    broadcastMasterSync('items');
   };
 
   const handleDeleteMasterItem = (id: string) => {
-    recordDeletedId(DELETED_ITEMS_KEY, id);
+    persistMasterMeta('items', { addDeletedId: id, markTouched: true });
     setMasterItems((prev) => prev.filter((i) => i.id !== id));
     deleteMasterItem(id).catch((err) => console.error('Cloud delete item error:', err));
+    broadcastMasterSync('items');
   };
 
   // Route Handlers
@@ -1043,97 +1411,367 @@ export default function App() {
     };
     setMasterRoutes((prev) => deduplicateMasterRoutes([...prev, route]));
     saveMasterRoute(route).catch((err) => console.error('Cloud save route error:', err));
+    broadcastMasterSync('routes');
   };
 
   const handleUpdateMasterRoute = (updatedRoute: MasterRoute) => {
+    const oldRoute = masterRoutes.find((r) => r.id === updatedRoute.id);
+    const nowIso = new Date().toISOString();
+
     setMasterRoutes((prev) =>
-      prev.map((r) => (r.id === updatedRoute.id ? updatedRoute : r))
+      deduplicateMasterRoutes(
+        prev.map((r) => (r.id === updatedRoute.id ? updatedRoute : r))
+      )
     );
     saveMasterRoute(updatedRoute).catch((err) => console.error('Cloud update route error:', err));
+
+    // Cascade perubahan nama/alamat rute ke Surat Jalan terbit yang merujuk rute ini
+    const changedSjs: SuratJalanRecord[] = [];
+    const nextSjs = suratJalanHistory.map((sj) => {
+      const matchDari = sj.ruteDariId === updatedRoute.id;
+      const matchTujuan = sj.ruteTujuanId === updatedRoute.id;
+      if (!matchDari && !matchTujuan) return sj;
+      const nextSj: SuratJalanRecord = {
+        ...sj,
+        ...(matchDari
+          ? {
+              ruteDariNama: updatedRoute.namaLokasi,
+              ruteDariAlamat: updatedRoute.alamat
+            }
+          : {}),
+        ...(matchTujuan
+          ? {
+              ruteTujuanKode: updatedRoute.kodeLokasi,
+              ruteTujuanNama: updatedRoute.namaLokasi,
+              ruteTujuanAlamat: updatedRoute.alamat
+            }
+          : {}),
+        updatedAt: nowIso,
+        lastUpdateAction: `Sync Master Rute (${updatedRoute.kodeLokasi})`
+      };
+      changedSjs.push(nextSj);
+      return nextSj;
+    });
+    if (changedSjs.length > 0) {
+      setSuratJalanHistory(nextSjs);
+      Promise.all(changedSjs.map((sj) => updateSuratJalanRecord(sj).catch(() => undefined)));
+      setLocalMutationVersion((v) => v + 1);
+    }
+
+    // Jika namaLokasi berubah, sinkronkan ke masterTariffs yang cocok
+    if (
+      oldRoute &&
+      normalizeRouteKey(oldRoute.namaLokasi) !== normalizeRouteKey(updatedRoute.namaLokasi)
+    ) {
+      const oldNamaKey = normalizeRouteKey(oldRoute.namaLokasi);
+      const changedTariffs: MasterRouteTariff[] = [];
+      const nextTariffs = masterTariffs.map((t) => {
+        const matchAwal = normalizeRouteKey(t.ruteAwal) === oldNamaKey;
+        const matchTuj = normalizeRouteKey(t.ruteTujuan) === oldNamaKey;
+        if (!matchAwal && !matchTuj) return t;
+        const nextT: MasterRouteTariff = {
+          ...t,
+          ...(matchAwal ? { ruteAwal: updatedRoute.namaLokasi } : {}),
+          ...(matchTuj
+            ? {
+                ruteTujuan: updatedRoute.namaLokasi,
+                alamatTujuan: updatedRoute.alamat || t.alamatTujuan
+              }
+            : {})
+        };
+        changedTariffs.push(nextT);
+        return nextT;
+      });
+      if (changedTariffs.length > 0) {
+        setMasterTariffs(nextTariffs);
+        Promise.all(changedTariffs.map((t) => saveMasterTariff(t).catch(() => undefined)));
+      }
+    }
+
+    broadcastMasterSync('routes');
   };
 
   const handleDeleteMasterRoute = (id: string) => {
-    recordDeletedId(DELETED_ROUTES_KEY, id);
+    persistMasterMeta('routes', { addDeletedId: id, markTouched: true });
     setMasterRoutes((prev) => prev.filter((r) => r.id !== id));
     deleteMasterRoute(id).catch((err) => console.error('Cloud delete route error:', err));
+    broadcastMasterSync('routes');
   };
 
   // Vendor Handlers
+  const ensureVendorsSeeded = (overrideList?: MasterVendor[]) => {
+    const cloudVendors = latestCloudRef.current.vendors;
+    if (
+      (!cloudVendors || cloudVendors.length === 0) &&
+      !cloudMetaRef.current.touched?.vendors
+    ) {
+      const list = overrideList ?? masterVendors;
+      seedMasterVendors(list).catch(() => {});
+      persistMasterMeta('vendors', { markTouched: true });
+    }
+  };
+
   const handleAddMasterVendor = (newVendor: Omit<MasterVendor, 'id'>) => {
     const vendor: MasterVendor = {
       ...newVendor,
       id: `vendor-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`
     };
-    setMasterVendors((prev) => [...prev, vendor]);
+    const nextList = [...masterVendors, vendor];
+    ensureVendorsSeeded(nextList);
+    setMasterVendors(nextList);
     saveMasterVendor(vendor).catch((err) => console.error('Cloud save vendor error:', err));
+    persistMasterMeta('vendors', { markTouched: true });
+    broadcastMasterSync('vendors');
   };
 
   const handleUpdateMasterVendor = (updatedVendor: MasterVendor) => {
-    setMasterVendors((prev) =>
-      prev.map((v) => (v.id === updatedVendor.id ? updatedVendor : v))
+    const oldVendor = masterVendors.find((v) => v.id === updatedVendor.id);
+    const nextList = masterVendors.map((v) =>
+      v.id === updatedVendor.id ? updatedVendor : v
     );
+    ensureVendorsSeeded(nextList);
+    setMasterVendors(nextList);
     saveMasterVendor(updatedVendor).catch((err) => console.error('Cloud update vendor error:', err));
+    persistMasterMeta('vendors', { markTouched: true });
+
+    // Cascade perubahan nama vendor ke masterTariffs & Surat Jalan terbit
+    if (
+      oldVendor &&
+      oldVendor.namaVendor.trim().toLowerCase() !== updatedVendor.namaVendor.trim().toLowerCase()
+    ) {
+      const oldLower = oldVendor.namaVendor.trim().toLowerCase();
+      const changedTariffs: MasterRouteTariff[] = [];
+      const nextTariffs = masterTariffs.map((t) => {
+        if ((t.vendor || '').trim().toLowerCase() !== oldLower) return t;
+        const nextT = { ...t, vendor: updatedVendor.namaVendor };
+        changedTariffs.push(nextT);
+        return nextT;
+      });
+      if (changedTariffs.length > 0) {
+        setMasterTariffs(nextTariffs);
+        Promise.all(changedTariffs.map((t) => saveMasterTariff(t).catch(() => undefined)));
+      }
+
+      const nowIso = new Date().toISOString();
+      const changedSjs: SuratJalanRecord[] = [];
+      const nextSjs = suratJalanHistory.map((sj) => {
+        if (
+          sj.vendorId !== updatedVendor.id &&
+          (sj.namaVendorArmada || '').trim().toLowerCase() !== oldLower
+        ) {
+          return sj;
+        }
+        const nextSj: SuratJalanRecord = {
+          ...sj,
+          namaVendorArmada: updatedVendor.namaVendor,
+          updatedAt: nowIso,
+          lastUpdateAction: `Sync Vendor (${updatedVendor.namaVendor})`
+        };
+        changedSjs.push(nextSj);
+        return nextSj;
+      });
+      if (changedSjs.length > 0) {
+        setSuratJalanHistory(nextSjs);
+        Promise.all(changedSjs.map((sj) => updateSuratJalanRecord(sj).catch(() => undefined)));
+        setLocalMutationVersion((v) => v + 1);
+      }
+    }
+
+    broadcastMasterSync('vendors');
   };
 
   const handleDeleteMasterVendor = (id: string) => {
-    recordDeletedId(DELETED_VENDORS_KEY, id);
-    setMasterVendors((prev) => prev.filter((v) => v.id !== id));
+    const remaining = masterVendors.filter((v) => v.id !== id);
+    ensureVendorsSeeded(remaining);
+    persistMasterMeta('vendors', { addDeletedId: id, markTouched: true });
+    setMasterVendors(remaining);
     deleteMasterVendor(id).catch((err) => console.error('Cloud delete vendor error:', err));
+    broadcastMasterSync('vendors');
   };
 
   // Tujuan & Tarif Handlers
+  const ensureTariffsSeeded = (overrideList?: MasterRouteTariff[]) => {
+    const cloudTariffs = latestCloudRef.current.tariffs;
+    if (
+      (!cloudTariffs || cloudTariffs.length === 0) &&
+      !cloudMetaRef.current.touched?.tariffs
+    ) {
+      const list = overrideList ?? masterTariffs;
+      seedMasterTariffs(list).catch(() => {});
+      persistMasterMeta('tariffs', { markTouched: true });
+    }
+  };
+
+  const syncTariffLocationsToRoutes = (tariff: MasterRouteTariff) => {
+    const candidates = [
+      { loc: (tariff.ruteAwal || '').trim(), isTujuan: false },
+      { loc: (tariff.ruteTujuan || '').trim(), isTujuan: true }
+    ];
+    let currentRoutes = [...masterRoutes];
+    const routesToSave: MasterRoute[] = [];
+
+    candidates.forEach(({ loc, isTujuan }) => {
+      if (!loc) return;
+      const locKey = normalizeRouteKey(loc);
+      const existing = currentRoutes.find(
+        (r) =>
+          normalizeRouteKey(r.namaLokasi) === locKey ||
+          normalizeRouteKey(r.kodeLokasi) === locKey
+      );
+      if (!existing) {
+        const created: MasterRoute = {
+          id: `route-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+          kodeLokasi: loc,
+          namaLokasi: loc,
+          alamat: isTujuan ? tariff.alamatTujuan || '' : '',
+          tipe: 'KEDUA',
+          tarifDefault: isTujuan ? tariff.tarif : 0,
+          ppnPersen: isTujuan ? tariff.ppnPersen : 0
+        };
+        currentRoutes = deduplicateMasterRoutes([...currentRoutes, created]);
+        routesToSave.push(created);
+      } else if (isTujuan && tariff.alamatTujuan && existing.alamat !== tariff.alamatTujuan) {
+        const updatedRoute: MasterRoute = {
+          ...existing,
+          alamat: tariff.alamatTujuan
+        };
+        currentRoutes = currentRoutes.map((r) => (r.id === existing.id ? updatedRoute : r));
+        routesToSave.push(updatedRoute);
+      }
+    });
+
+    if (routesToSave.length > 0) {
+      setMasterRoutes(currentRoutes);
+      Promise.all(routesToSave.map((r) => saveMasterRoute(r).catch(() => undefined)));
+    }
+  };
+
   const handleAddMasterTariff = (newTariff: Omit<MasterRouteTariff, 'id'>) => {
     const tariff: MasterRouteTariff = {
       ...newTariff,
       id: `trf-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`
     };
-    setMasterTariffs((prev) => [tariff, ...prev]);
+    const nextList = [tariff, ...masterTariffs];
+    ensureTariffsSeeded(nextList);
+    setMasterTariffs(nextList);
     saveMasterTariff(tariff).catch((err) => console.error('Cloud save tariff error:', err));
+    persistMasterMeta('tariffs', { markTouched: true });
+    syncTariffLocationsToRoutes(tariff);
+    broadcastMasterSync('tariffs');
   };
 
   const handleUpdateMasterTariff = (updatedTariff: MasterRouteTariff) => {
-    setMasterTariffs((prev) =>
-      prev.map((t) => (t.id === updatedTariff.id ? updatedTariff : t))
+    const nextList = masterTariffs.map((t) =>
+      t.id === updatedTariff.id ? updatedTariff : t
     );
+    ensureTariffsSeeded(nextList);
+    setMasterTariffs(nextList);
     saveMasterTariff(updatedTariff).catch((err) => console.error('Cloud update tariff error:', err));
+    persistMasterMeta('tariffs', { markTouched: true });
+    syncTariffLocationsToRoutes(updatedTariff);
+    setLocalMutationVersion((v) => v + 1);
+    broadcastMasterSync('tariffs');
   };
 
   const handleDeleteMasterTariff = (id: string) => {
-    recordDeletedId(DELETED_TARIFFS_KEY, id);
-    setMasterTariffs((prev) => prev.filter((t) => t.id !== id));
+    const remaining = masterTariffs.filter((t) => t.id !== id);
+    ensureTariffsSeeded(remaining);
+    persistMasterMeta('tariffs', { addDeletedId: id, markTouched: true });
+    setMasterTariffs(remaining);
     deleteMasterTariff(id).catch((err) => console.error('Cloud delete tariff error:', err));
+    broadcastMasterSync('tariffs');
   };
 
   // Blacklist Handlers
+  const ensureBlacklistSeeded = (overrideList?: BlacklistRecord[]) => {
+    const cloudBlacklist = latestCloudRef.current.blacklist;
+    if (
+      (!cloudBlacklist || cloudBlacklist.length === 0) &&
+      !cloudMetaRef.current.touched?.blacklist
+    ) {
+      const list = overrideList ?? blacklistRecords;
+      seedBlacklistRecords(list).catch(() => {});
+      persistMasterMeta('blacklist', { markTouched: true });
+    }
+  };
+
   const handleAddBlacklist = (newBl: Omit<BlacklistRecord, 'id'>) => {
     const bl: BlacklistRecord = {
       ...newBl,
       id: `bl-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`
     };
-    setBlacklistRecords((prev) => [bl, ...prev]);
+    const nextList = [bl, ...blacklistRecords];
+    ensureBlacklistSeeded(nextList);
+    setBlacklistRecords(nextList);
     saveBlacklistRecord(bl).catch((err) => console.error('Cloud save blacklist error:', err));
+    persistMasterMeta('blacklist', { markTouched: true });
+    broadcastMasterSync('blacklist');
+  };
+
+  const handleUpdateBlacklist = (updatedBl: BlacklistRecord) => {
+    const nextList = blacklistRecords.map((b) =>
+      b.id === updatedBl.id ? updatedBl : b
+    );
+    ensureBlacklistSeeded(nextList);
+    setBlacklistRecords(nextList);
+    saveBlacklistRecord(updatedBl).catch((err) => console.error('Cloud update blacklist error:', err));
+    persistMasterMeta('blacklist', { markTouched: true });
+    broadcastMasterSync('blacklist');
   };
 
   const handleDeleteBlacklist = (id: string) => {
-    recordDeletedId(DELETED_BLACKLIST_KEY, id);
-    setBlacklistRecords((prev) => prev.filter((b) => b.id !== id));
+    const remaining = blacklistRecords.filter((b) => b.id !== id);
+    ensureBlacklistSeeded(remaining);
+    persistMasterMeta('blacklist', { addDeletedId: id, markTouched: true });
+    setBlacklistRecords(remaining);
     deleteBlacklistRecord(id).catch((err) => console.error('Cloud delete blacklist error:', err));
+    broadcastMasterSync('blacklist');
   };
 
   // Warehouse Users Handlers
+  const ensureUsersSeeded = (overrideList?: WarehouseUser[]) => {
+    const cloudUsers = latestCloudRef.current.users;
+    if (
+      (!cloudUsers || cloudUsers.length === 0) &&
+      !cloudMetaRef.current.touched?.users
+    ) {
+      const list = overrideList ?? warehouseUsers;
+      seedWarehouseUsers(list).catch(() => {});
+      persistMasterMeta('users', { markTouched: true });
+    }
+  };
+
   const handleAddWarehouseUser = (newUser: Omit<WarehouseUser, 'id'>) => {
     const usr: WarehouseUser = {
       ...newUser,
       id: `usr-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`
     };
-    setWarehouseUsers((prev) => [...prev, usr]);
+    const nextList = [...warehouseUsers, usr];
+    ensureUsersSeeded(nextList);
+    setWarehouseUsers(nextList);
     saveWarehouseUser(usr).catch((err) => console.error('Cloud save user error:', err));
+    persistMasterMeta('users', { markTouched: true });
+    broadcastMasterSync('users');
+  };
+
+  const handleUpdateWarehouseUser = (updatedUser: WarehouseUser) => {
+    const nextList = warehouseUsers.map((u) =>
+      u.id === updatedUser.id ? updatedUser : u
+    );
+    ensureUsersSeeded(nextList);
+    setWarehouseUsers(nextList);
+    saveWarehouseUser(updatedUser).catch((err) => console.error('Cloud update user error:', err));
+    persistMasterMeta('users', { markTouched: true });
+    broadcastMasterSync('users');
   };
 
   const handleDeleteWarehouseUser = (id: string) => {
-    recordDeletedId(DELETED_USERS_KEY, id);
-    setWarehouseUsers((prev) => prev.filter((u) => u.id !== id));
+    const remaining = warehouseUsers.filter((u) => u.id !== id);
+    ensureUsersSeeded(remaining);
+    persistMasterMeta('users', { addDeletedId: id, markTouched: true });
+    setWarehouseUsers(remaining);
     deleteWarehouseUser(id).catch((err) => console.error('Cloud delete user error:', err));
+    broadcastMasterSync('users');
   };
 
   // Master Warehouses Handlers
@@ -1144,24 +1782,58 @@ export default function App() {
     };
     setMasterWarehouses((prev) => [...prev, wh]);
     saveMasterWarehouse(wh).catch((err) => console.error('Cloud save warehouse error:', err));
+    broadcastMasterSync('warehouses');
   };
 
   const handleUpdateMasterWarehouse = (updatedWarehouse: MasterWarehouse) => {
+    const oldWh = masterWarehouses.find((w) => w.id === updatedWarehouse.id);
     setMasterWarehouses((prev) =>
       prev.map((w) => (w.id === updatedWarehouse.id ? updatedWarehouse : w))
     );
     saveMasterWarehouse(updatedWarehouse).catch((err) =>
       console.error('Cloud update warehouse error:', err)
     );
+
+    // Sinkronkan lokasiGudang pada PalletRecord yang berada di rak gudang ini
+    const oldCfg = getWarehouseRackSlots(oldWh);
+    const newCfg = getWarehouseRackSlots(updatedWarehouse);
+    const prefixes = new Set(
+      [oldCfg.leftPrefix, oldCfg.rightPrefix, newCfg.leftPrefix, newCfg.rightPrefix].filter(Boolean)
+    );
+    const nextCanonical = mapGroupToCanonicalWarehouse(updatedWarehouse.locationGroup);
+    const nowIso = new Date().toISOString();
+    const changedPallets: PalletRecord[] = [];
+    const nextRecords = records.map((r) => {
+      const binPrefix = (r.lokasiBin || '').trim().toUpperCase().split('.')[0];
+      if (!binPrefix || !prefixes.has(binPrefix)) return r;
+      if (r.lokasiGudang === nextCanonical) return r;
+      const nextRec: PalletRecord = {
+        ...r,
+        lokasiGudang: nextCanonical,
+        updatedAt: nowIso,
+        lastUpdateAction: `Sync Master Gudang (${updatedWarehouse.namaGudang})`
+      };
+      changedPallets.push(nextRec);
+      return nextRec;
+    });
+    if (changedPallets.length > 0) {
+      setRecords(nextRecords);
+      Promise.all(
+        changedPallets.map((p) => updatePalletRecord(p).catch(() => undefined))
+      );
+      setLocalMutationVersion((v) => v + 1);
+    }
+    broadcastMasterSync('warehouses');
   };
 
   const handleDeleteMasterWarehouse = (id: string) => {
-    recordDeletedId(DELETED_WAREHOUSES_KEY, id);
+    persistMasterMeta('warehouses', { addDeletedId: id, markTouched: true });
     setMasterWarehouses((prev) => prev.filter((w) => w.id !== id));
     if (activeWarehouseId === id) {
       setActiveWarehouseId(null);
     }
     deleteMasterWarehouse(id).catch((err) => console.error('Cloud delete warehouse error:', err));
+    broadcastMasterSync('warehouses');
   };
 
   // Surat Jalan Save / Update Handler
@@ -1604,6 +2276,13 @@ export default function App() {
     setIsMobileMenuOpen(false);
   };
 
+  const activeWarehouseUsers = warehouseUsers.filter((u) => u.status === 'Aktif');
+  const currentOperator =
+    activeWarehouseUsers.find((u) => u.id === activeOperatorId) ||
+    activeWarehouseUsers[0] ||
+    warehouseUsers[0] ||
+    null;
+
   const sharedMasterModal = (
     <MasterItemModal
       isOpen={isMasterModalOpen}
@@ -1631,9 +2310,11 @@ export default function App() {
       onDeleteMasterWarehouse={handleDeleteMasterWarehouse}
       blacklistRecords={blacklistRecords}
       onAddBlacklistRecord={handleAddBlacklist}
+      onUpdateBlacklistRecord={handleUpdateBlacklist}
       onDeleteBlacklistRecord={handleDeleteBlacklist}
       warehouseUsers={warehouseUsers}
       onAddWarehouseUser={handleAddWarehouseUser}
+      onUpdateWarehouseUser={handleUpdateWarehouseUser}
       onDeleteWarehouseUser={handleDeleteWarehouseUser}
       suratJalanHistory={suratJalanHistory}
     />
@@ -2145,11 +2826,33 @@ export default function App() {
             <span>Scan Kamera Barcode / QR Bin</span>
           </button>
 
-          {/* Dark Mode & Operator Info */}
-          <div className="flex items-center justify-between pt-1 text-[11px] text-slate-500">
-            <div className="flex items-center gap-1.5 truncate max-w-[170px]">
-              <UserCheck className="w-3.5 h-3.5 text-emerald-600" />
-              <span className="truncate">Sandy (Super Admin)</span>
+          {/* Dark Mode & Active Operator Switcher (Live dari User Management) */}
+          <div className="flex items-center justify-between pt-1 gap-2 text-[11px] text-slate-500">
+            <div className="flex items-center gap-1.5 min-w-0 flex-1">
+              <UserCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+              {activeWarehouseUsers.length > 0 ? (
+                <select
+                  aria-label="Operator Aktif"
+                  value={currentOperator?.id || ''}
+                  onChange={(e) => setActiveOperatorId(e.target.value)}
+                  className="w-full min-w-0 bg-transparent text-[11px] font-semibold text-slate-700 dark:text-slate-300 truncate focus:outline-none cursor-pointer"
+                  title="Petugas aktif (otomatis mengikuti daftar User Management)"
+                >
+                  {activeWarehouseUsers.map((u) => (
+                    <option
+                      key={u.id}
+                      value={u.id}
+                      className="bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-200"
+                    >
+                      {u.nama} ({u.role})
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <span className="truncate text-amber-600 dark:text-amber-400">
+                  Belum ada petugas aktif
+                </span>
+              )}
             </div>
 
             <button
