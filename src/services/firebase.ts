@@ -517,20 +517,20 @@ export async function saveSuratJalanRecord(
   record: import('../types/warehouse').SuratJalanRecord
 ): Promise<void> {
   try {
-    const batch = writeBatch(db);
     const suratRef = doc(db, SURAT_JALAN_COLLECTION, record.id);
-    batch.set(suratRef, sanitizeForFirestore(record));
+    await setDoc(suratRef, sanitizeForFirestore(record));
 
-    // Also mark the associated pallet records with suratJalanId and noSuratJalan
-    record.palletIds.forEach((pid) => {
-      const pRef = doc(db, PALLET_COLLECTION, pid);
-      batch.update(pRef, {
-        suratJalanId: record.id,
-        noSuratJalan: record.noSuratJalan
-      });
-    });
-
-    await batch.commit();
+    // Also mark the associated pallet records with suratJalanId and noSuratJalan (ignore missing docs)
+    if (record.palletIds && record.palletIds.length > 0) {
+      await Promise.all(
+        record.palletIds.map((pid) =>
+          updateDoc(doc(db, PALLET_COLLECTION, pid), {
+            suratJalanId: record.id,
+            noSuratJalan: record.noSuratJalan
+          }).catch(() => undefined)
+        )
+      );
+    }
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, `${SURAT_JALAN_COLLECTION}/${record.id}`);
   }

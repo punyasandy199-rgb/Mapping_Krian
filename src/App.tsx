@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { User } from 'firebase/auth';
 import {
   PalletRecord,
@@ -523,11 +523,19 @@ export default function App() {
   const [isCloudConnected, setIsCloudConnected] = useState(false);
 
   // Google Sheets Integration State (Cara B: Shared Apps Script Bridge 24/7 + Cara A: OAuth Token in memory)
-  const [syncMode, setSyncMode] = useState<SheetsSyncMode>('apps_script');
+  const [syncMode, setSyncMode] = useState<SheetsSyncMode>(() => {
+    try {
+      const saved = localStorage.getItem('pallettrack_gsheets_mode_v1');
+      return saved === 'oauth' ? 'oauth' : 'apps_script';
+    } catch {
+      return 'apps_script';
+    }
+  });
   const [appsScriptUrl, setAppsScriptUrl] = useState<string>('');
   const [appsScriptSecret, setAppsScriptSecret] = useState<string>(DEFAULT_APPS_SCRIPT_SECRET);
   const [isBridgeSavedInCloud, setIsBridgeSavedInCloud] = useState<boolean>(false);
   const [cloudBridgeLastSyncedAt, setCloudBridgeLastSyncedAt] = useState<string | null>(null);
+  const [detectedBridgeVersion, setDetectedBridgeVersion] = useState<number | null>(null);
 
   const [googleUser, setGoogleUser] = useState<User | null>(null);
   const [needsGoogleAuth, setNeedsGoogleAuth] = useState<boolean>(true);
@@ -557,7 +565,17 @@ export default function App() {
   });
   const [includeRekapTab, setIncludeRekapTab] = useState<boolean>(true);
   const [lockSheetReadOnly, setLockSheetReadOnly] = useState<boolean>(true);
-  const [autoSyncEnabled, setAutoSyncEnabled] = useState<boolean>(false);
+  const [autoSyncEnabled, setAutoSyncEnabled] = useState<boolean>(() => {
+    try {
+      const savedMode = localStorage.getItem('pallettrack_gsheets_mode_v1');
+      if (savedMode === 'oauth') {
+        return localStorage.getItem('pallettrack_gsheets_autosync_oauth_v1') === 'true';
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  });
   const [isSheetsBannerDismissed, setIsSheetsBannerDismissed] = useState<boolean>(false);
   const [isSyncingSheets, setIsSyncingSheets] = useState<boolean>(false);
   const [lastSyncResult, setLastSyncResult] = useState<SyncAllResult | null>(null);
@@ -565,8 +583,11 @@ export default function App() {
   const [pendingSyncCount, setPendingSyncCount] = useState<number>(0);
   const [syncActivityLogs, setSyncActivityLogs] = useState<SyncActivityLogItem[]>([]);
   const [localMutationVersion, setLocalMutationVersion] = useState<number>(0);
+  const localMutationVersionRef = useRef<number>(0);
   const lastSyncedDigestRef = useRef<string>('');
   const lastSyncedLocalVersionRef = useRef<number>(0);
+  const isAutoSyncRunningRef = useRef<boolean>(false);
+  const hasQueuedAutoSyncRef = useRef<boolean>(false);
 
   // Sync dark class on document element
   useEffect(() => {
@@ -780,7 +801,8 @@ export default function App() {
     // 10. Subscribe to Shared Google Sheets Bridge Settings (for 24/7 no-login operator sync)
     const unsubscribeBridge = subscribeToSheetsBridgeConfig((cfg) => {
       if (!cfg) return;
-      setSyncMode(cfg.syncMode || 'apps_script');
+      const effectiveMode: SheetsSyncMode = cfg.syncMode || 'apps_script';
+      setSyncMode(effectiveMode);
       setAppsScriptUrl(cfg.appsScriptUrl || '');
       setAppsScriptSecret(cfg.appsScriptSecret || DEFAULT_APPS_SCRIPT_SECRET);
       if (cfg.spreadsheetUrl) setSpreadsheetInput(cfg.spreadsheetUrl);
@@ -802,8 +824,17 @@ export default function App() {
       }
       setIsBridgeSavedInCloud(Boolean(cfg.appsScriptUrl && isValidAppsScriptUrl(cfg.appsScriptUrl)));
       setCloudBridgeLastSyncedAt(cfg.lastSyncedAt || null);
-      if ((cfg.syncMode || 'apps_script') === 'apps_script') {
+      if (effectiveMode === 'apps_script') {
         setAutoSyncEnabled(Boolean(cfg.autoSync24x7Enabled));
+      } else {
+        try {
+          const savedOAuthAuto = localStorage.getItem('pallettrack_gsheets_autosync_oauth_v1');
+          if (savedOAuthAuto !== null) {
+            setAutoSyncEnabled(savedOAuthAuto === 'true');
+          } else if (cfg.autoSync24x7Enabled !== undefined) {
+            setAutoSyncEnabled(Boolean(cfg.autoSync24x7Enabled));
+          }
+        } catch {}
       }
     });
 
@@ -976,6 +1007,24 @@ export default function App() {
     } catch (e) {}
   }, [manualSjSpreadsheetInput]);
 
+  useEffect(() => {
+    try {
+      localStorage.setItem('pallettrack_gsheets_mode_v1', syncMode);
+    } catch (e) {}
+  }, [syncMode]);
+
+  useEffect(() => {
+    if (syncMode === 'oauth') {
+      try {
+        localStorage.setItem('pallettrack_gsheets_autosync_oauth_v1', String(autoSyncEnabled));
+      } catch (e) {}
+    }
+  }, [syncMode, autoSyncEnabled]);
+
+  useEffect(() => {
+    localMutationVersionRef.current = localMutationVersion;
+  }, [localMutationVersion]);
+
   // Initialize Google Sheets OAuth listener
   useEffect(() => {
     const unsub = initGoogleSheetsAuth(
@@ -1008,13 +1057,19 @@ export default function App() {
     const sjSig = suratJalanHistory
       .map(
         (s) =>
-          `${s.id}:${s.noSuratJalan}:${s.noSpp || ''}:${s.noPo || ''}:${s.noPolisi || ''}:${
+          `${s.id}:${s.updatedAt || s.createdAt}:${s.noSuratJalan}:${s.tanggal}:${
+            s.tanggalPengambilanFormatted || ''
+          }:${s.tglJamCetakCustom || ''}:${s.noSpp || ''}:${s.noPo || ''}:${s.noPolisi || ''}:${
             s.namaVendorArmada || ''
-          }:${s.namaDriver || ''}:${s.noKontainer || ''}:${s.noFaktur || ''}:${
-            s.noInvoice || ''
-          }:${s.ruteTujuanNama || ''}:${s.tarifTotal ?? ''}:${s.grandTotalBox}:${
-            (s.itemsSummary || []).length
-          }:${s.createdAt}`
+          }:${s.namaDriver || ''}:${s.noHpDriver || ''}:${s.noKontainer || ''}:${
+            s.noFaktur || ''
+          }:${s.noInvoice || ''}:${s.ruteDariNama || ''}:${s.ruteTujuanNama || ''}:${
+            s.tarif ?? ''
+          }:${s.ppnPersen ?? ''}:${s.tarifTotal ?? ''}:${s.grandTotalBox}:${s.grandTotalKg}:${
+            s.note || ''
+          }:${(s.palletIds || []).join(',')}:${(s.itemsSummary || [])
+            .map((it) => `${it.kodeItem || '-'}:${it.namaBarang}:${it.qtyBox}:${it.totalKg}`)
+            .join(';')}`
       )
       .sort()
       .join('|');
@@ -1117,6 +1172,9 @@ export default function App() {
               });
         setLastSyncResult(result);
         setCloudBridgeLastSyncedAt(result.syncedAt);
+        if (result.bridgeVersion !== undefined) {
+          setDetectedBridgeVersion(result.bridgeVersion);
+        }
         if (
           result.palletTabTitle &&
           (!selectedSheetTab ||
@@ -1172,6 +1230,16 @@ export default function App() {
     ]
   );
 
+  const executeSheetsSyncRef = useRef(executeSheetsSync);
+  useEffect(() => {
+    executeSheetsSyncRef.current = executeSheetsSync;
+  }, [executeSheetsSync]);
+
+  const oauthDataDigest = useMemo(
+    () => (syncMode === 'oauth' ? computeDataDigest() : ''),
+    [syncMode, computeDataDigest]
+  );
+
   const handleGoogleSignIn = async () => {
     setIsGoogleLoggingIn(true);
     setSheetsSyncError(null);
@@ -1179,6 +1247,11 @@ export default function App() {
       const { user } = await signInWithGoogleSheets();
       setGoogleUser(user);
       setNeedsGoogleAuth(false);
+      if (autoSyncEnabled) {
+        window.setTimeout(() => {
+          executeSheetsSyncRef.current('Otomatis').catch(() => {});
+        }, 400);
+      }
     } catch (err: unknown) {
       setSheetsSyncError(
         err instanceof Error ? err.message : 'Gagal masuk dengan akun Google.'
@@ -1199,6 +1272,7 @@ export default function App() {
 
   const handleEnableAutoSync = async () => {
     const res = await executeSheetsSync('Otomatis');
+    lastSyncedLocalVersionRef.current = localMutationVersionRef.current;
     setAutoSyncEnabled(true);
     if (syncMode === 'apps_script' && isValidAppsScriptUrl(appsScriptUrl)) {
       await persistBridgeConfigToCloud({
@@ -1228,7 +1302,7 @@ export default function App() {
   };
 
   // Auto-sync debounced effect:
-  // - Cara B (apps_script): runs on ANY operator's device whenever this device performs a mutation (24/7, no Google login needed!)
+  // - Cara B (apps_script): runs on the mutating device (24/7 without Google login), never cancelled by Firestore snapshot echoes
   // - Cara A (oauth): runs on the signed-in owner's browser whenever any data digest changes
   useEffect(() => {
     if (!autoSyncEnabled) return;
@@ -1242,25 +1316,57 @@ export default function App() {
         return;
       }
 
-      const timer = window.setTimeout(() => {
-        lastSyncedLocalVersionRef.current = localMutationVersion;
-        executeSheetsSync('Otomatis').catch(() => {});
+      const timer = window.setTimeout(async () => {
+        if (isAutoSyncRunningRef.current) {
+          hasQueuedAutoSyncRef.current = true;
+          return;
+        }
+        isAutoSyncRunningRef.current = true;
+        const targetVer = localMutationVersionRef.current;
+        try {
+          await executeSheetsSyncRef.current('Otomatis');
+          lastSyncedLocalVersionRef.current = targetVer;
+        } catch {
+          // Error already captured in sheetsSyncError & syncActivityLogs
+        } finally {
+          isAutoSyncRunningRef.current = false;
+          if (hasQueuedAutoSyncRef.current || localMutationVersionRef.current > targetVer) {
+            hasQueuedAutoSyncRef.current = false;
+            setLocalMutationVersion((v) => v + 1);
+          }
+        }
       }, 1200);
 
       return () => window.clearTimeout(timer);
     }
 
-    const digest = computeDataDigest();
-    if (digest === lastSyncedDigestRef.current) return;
+    if (!oauthDataDigest || oauthDataDigest === lastSyncedDigestRef.current) return;
 
     if (needsGoogleAuth || !getGoogleSheetsAccessToken()) {
       setPendingSyncCount((c) => c + 1);
       return;
     }
 
-    const timer = window.setTimeout(() => {
-      executeSheetsSync('Otomatis').catch(() => {});
-    }, 1500);
+    const timer = window.setTimeout(async () => {
+      if (isAutoSyncRunningRef.current) {
+        hasQueuedAutoSyncRef.current = true;
+        return;
+      }
+      isAutoSyncRunningRef.current = true;
+      try {
+        await executeSheetsSyncRef.current('Otomatis');
+      } catch {
+        // Error already captured in sheetsSyncError & syncActivityLogs
+      } finally {
+        isAutoSyncRunningRef.current = false;
+        if (hasQueuedAutoSyncRef.current) {
+          hasQueuedAutoSyncRef.current = false;
+          window.setTimeout(() => {
+            executeSheetsSyncRef.current('Otomatis').catch(() => {});
+          }, 500);
+        }
+      }
+    }, 1400);
 
     return () => window.clearTimeout(timer);
   }, [
@@ -1268,9 +1374,8 @@ export default function App() {
     syncMode,
     appsScriptUrl,
     localMutationVersion,
-    computeDataDigest,
-    needsGoogleAuth,
-    executeSheetsSync
+    oauthDataDigest,
+    needsGoogleAuth
   ]);
 
   // Master Items Handlers
@@ -3131,6 +3236,24 @@ export default function App() {
               blacklistRecords={blacklistRecords}
               onSaveSuratJalan={handleSaveSuratJalan}
               onDeleteSuratJalan={handleDeleteSuratJalan}
+              sheetsSyncStatus={{
+                autoSyncEnabled,
+                syncMode,
+                isBridgeConfigured:
+                  syncMode === 'apps_script'
+                    ? isValidAppsScriptUrl(appsScriptUrl)
+                    : !needsGoogleAuth,
+                isSyncing: isSyncingSheets,
+                error: sheetsSyncError,
+                lastSyncedAt: lastSyncResult?.syncedAt || cloudBridgeLastSyncedAt,
+                includeSuratJalanTab,
+                includeManualSjTab,
+                bridgeVersion: detectedBridgeVersion,
+                onOpenSheetsTab: () => setActiveTab('google_sheets'),
+                onSyncNow: async () => {
+                  await executeSheetsSync('Manual');
+                }
+              }}
             />
           )}
 
@@ -3141,16 +3264,23 @@ export default function App() {
               masterItems={masterItems}
               masterWarehouses={masterWarehouses}
               syncMode={syncMode}
-              onChangeSyncMode={(m) => setSyncMode(m)}
+              onChangeSyncMode={(m) => {
+                setSyncMode(m);
+                if (isBridgeSavedInCloud && isValidAppsScriptUrl(appsScriptUrl)) {
+                  persistBridgeConfigToCloud({ syncMode: m }).catch(() => {});
+                }
+              }}
               appsScriptUrl={appsScriptUrl}
               onChangeAppsScriptUrl={setAppsScriptUrl}
               appsScriptSecret={appsScriptSecret}
               onChangeAppsScriptSecret={setAppsScriptSecret}
               isBridgeSavedInCloud={isBridgeSavedInCloud}
               onSaveBridgeSettings={async (opts) => {
+                const nextAuto = opts?.autoSync24x7 ?? true;
+                setAutoSyncEnabled(nextAuto);
                 await persistBridgeConfigToCloud({
                   syncMode: 'apps_script',
-                  autoSync24x7Enabled: opts?.autoSync24x7 ?? autoSyncEnabled
+                  autoSync24x7Enabled: nextAuto
                 });
               }}
               googleUser={googleUser}
@@ -3159,17 +3289,47 @@ export default function App() {
               onGoogleSignIn={handleGoogleSignIn}
               onGoogleSignOut={handleGoogleSignOut}
               spreadsheetInput={spreadsheetInput}
-              onChangeSpreadsheetInput={setSpreadsheetInput}
+              onChangeSpreadsheetInput={(val) => {
+                setSpreadsheetInput(val);
+                if (isBridgeSavedInCloud && isValidAppsScriptUrl(appsScriptUrl)) {
+                  persistBridgeConfigToCloud({ spreadsheetUrl: val }).catch(() => {});
+                }
+              }}
               selectedSheetTab={selectedSheetTab}
-              onChangeSelectedSheetTab={setSelectedSheetTab}
+              onChangeSelectedSheetTab={(val) => {
+                setSelectedSheetTab(val);
+                if (isBridgeSavedInCloud && isValidAppsScriptUrl(appsScriptUrl)) {
+                  persistBridgeConfigToCloud({ palletTabTitle: val }).catch(() => {});
+                }
+              }}
               includeSuratJalanTab={includeSuratJalanTab}
-              onChangeIncludeSuratJalanTab={setIncludeSuratJalanTab}
+              onChangeIncludeSuratJalanTab={(val) => {
+                setIncludeSuratJalanTab(val);
+                if (isBridgeSavedInCloud && isValidAppsScriptUrl(appsScriptUrl)) {
+                  persistBridgeConfigToCloud({ includeSuratJalanTab: val }).catch(() => {});
+                }
+              }}
               includeManualSjTab={includeManualSjTab}
-              onChangeIncludeManualSjTab={setIncludeManualSjTab}
+              onChangeIncludeManualSjTab={(val) => {
+                setIncludeManualSjTab(val);
+                if (isBridgeSavedInCloud && isValidAppsScriptUrl(appsScriptUrl)) {
+                  persistBridgeConfigToCloud({ includeManualSjTab: val }).catch(() => {});
+                }
+              }}
               manualSjSpreadsheetInput={manualSjSpreadsheetInput}
-              onChangeManualSjSpreadsheetInput={setManualSjSpreadsheetInput}
+              onChangeManualSjSpreadsheetInput={(val) => {
+                setManualSjSpreadsheetInput(val);
+                if (isBridgeSavedInCloud && isValidAppsScriptUrl(appsScriptUrl)) {
+                  persistBridgeConfigToCloud({ manualSjSpreadsheetUrl: val }).catch(() => {});
+                }
+              }}
               includeRekapTab={includeRekapTab}
-              onChangeIncludeRekapTab={setIncludeRekapTab}
+              onChangeIncludeRekapTab={(val) => {
+                setIncludeRekapTab(val);
+                if (isBridgeSavedInCloud && isValidAppsScriptUrl(appsScriptUrl)) {
+                  persistBridgeConfigToCloud({ includeRekapTab: val }).catch(() => {});
+                }
+              }}
               lockSheetReadOnly={lockSheetReadOnly}
               onChangeLockSheetReadOnly={(val) => {
                 setLockSheetReadOnly(val);

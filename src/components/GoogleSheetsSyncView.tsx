@@ -290,9 +290,9 @@ export const GoogleSheetsSyncView: React.FC<GoogleSheetsSyncViewProps> = ({
       setBridgeTestOk(
         `Terhubung ke "${meta.title}" (${meta.sheets.length} tab terdeteksi)`
       );
-      await onSaveBridgeSettings();
+      await onSaveBridgeSettings({ autoSync24x7: true });
       showTempMessage(
-        'URL Bridge Apps Script berhasil disimpan ke Cloud! Semua operator kini terhubung tanpa perlu Login Google.'
+        'URL Bridge Apps Script berhasil disimpan ke Cloud & Auto-Sync 24/7 langsung aktif untuk semua operator!'
       );
     } catch (err: unknown) {
       setMetaError(
@@ -574,9 +574,10 @@ export const GoogleSheetsSyncView: React.FC<GoogleSheetsSyncViewProps> = ({
                   {metadata?.bridgeVersion ?? 1}). Klik{' '}
                   <strong>Salin Kode Apps Script</strong> di bawah, tempel ke editor Apps Script
                   lalu pilih <strong>Terapkan &rarr; Kelola deployment &rarr; Edit (ikon pensil)
-                  &rarr; Versi baru &rarr; Terapkan</strong> untuk mengaktifkan{' '}
-                  <strong>Kunci Sheet Read-Only (Anti-Edit Manual)</strong> serta pembaruan tab{' '}
-                  <strong>{DEFAULT_PALLET_TAB_TITLE}</strong>.
+                  &rarr; Versi baru &rarr; Terapkan</strong> agar tab{' '}
+                  <strong>{SURAT_JALAN_MANUAL_TAB_TITLE}</strong> (SJ tanpa pilih pallet), tab{' '}
+                  <strong>{DEFAULT_PALLET_TAB_TITLE}</strong>, serta{' '}
+                  <strong>Kunci Sheet Read-Only</strong> dapat berjalan otomatis.
                 </p>
               </div>
             )}

@@ -39,10 +39,25 @@ import {
   PackagePlus,
   History,
   ChevronDown,
-  AlertTriangle
+  AlertTriangle,
+  FileSpreadsheet
 } from 'lucide-react';
 import { SuratJalanPrintModal, SuratJalanPrintModel } from './SuratJalanPrintModal';
 import { getPalletBatches } from '../utils/batchCalculator';
+
+export interface SuratJalanSheetsSyncStatus {
+  autoSyncEnabled: boolean;
+  syncMode: 'apps_script' | 'oauth';
+  isBridgeConfigured: boolean;
+  isSyncing: boolean;
+  error: string | null;
+  lastSyncedAt?: string | null;
+  includeSuratJalanTab: boolean;
+  includeManualSjTab: boolean;
+  bridgeVersion?: number | null;
+  onOpenSheetsTab: () => void;
+  onSyncNow: () => Promise<void>;
+}
 
 interface SuratJalanViewProps {
   records: PalletRecord[];
@@ -54,6 +69,7 @@ interface SuratJalanViewProps {
   blacklistRecords?: BlacklistRecord[];
   onSaveSuratJalan: (record: SuratJalanRecord) => Promise<void>;
   onDeleteSuratJalan?: (record: SuratJalanRecord) => Promise<void>;
+  sheetsSyncStatus?: SuratJalanSheetsSyncStatus;
 }
 
 function normalizeNopol(nopol?: string): string {
@@ -239,7 +255,8 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
   suratJalanHistory,
   blacklistRecords = [],
   onSaveSuratJalan,
-  onDeleteSuratJalan
+  onDeleteSuratJalan,
+  sheetsSyncStatus
 }) => {
   // Sub-tabs: Buat Baru vs Riwayat Surat Jalan
   const [activeSubTab, setActiveSubTab] = useState<'create' | 'history'>('create');
@@ -332,9 +349,12 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
   const [confirmDeleteSjId, setConfirmDeleteSjId] = useState<string | null>(null);
   const [isDeletingSj, setIsDeletingSj] = useState<boolean>(false);
 
-  // Pencarian & Inline Input No. SPP / No. PO pada Riwayat Surat Jalan Terbit
+  // Pencarian, Filter Jenis No. SJ (RMW/FGW/GBJ), Filter Tanggal & Inline Input No. SPP / No. PO pada Riwayat Surat Jalan Terbit
   const [historySearch, setHistorySearch] = useState<string>('');
   const [historyDocFilter, setHistoryDocFilter] = useState<'ALL' | 'FILLED' | 'MISSING'>('ALL');
+  const [historySjPrefixFilter, setHistorySjPrefixFilter] = useState<'ALL' | 'RMW' | 'FGW' | 'GBJ'>('ALL');
+  const [historyDateFrom, setHistoryDateFrom] = useState<string>('');
+  const [historyDateTo, setHistoryDateTo] = useState<string>('');
   const [inlineDocEditId, setInlineDocEditId] = useState<string | null>(null);
   const [inlineNoSpp, setInlineNoSpp] = useState<string>('');
   const [inlineNoPo, setInlineNoPo] = useState<string>('');
@@ -1781,7 +1801,35 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
     }
   };
 
-  // Filtered Riwayat Surat Jalan Terbit (pencarian No. SPP, No. PO, No. SJ, Nopol, Tujuan, Vendor, Driver, Barang)
+  const getSjFilterIsoDate = (sj: SuratJalanRecord): string => {
+    const formatted = (sj.tanggalPengambilanFormatted || '').trim();
+    const ddmmyyyy = formatted.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (ddmmyyyy) {
+      return `${ddmmyyyy[3]}-${ddmmyyyy[2]}-${ddmmyyyy[1]}`;
+    }
+    const rawTanggal = (sj.tanggal || '').trim();
+    if (/^\d{4}-\d{2}-\d{2}/.test(rawTanggal)) {
+      return rawTanggal.slice(0, 10);
+    }
+    const rawDdMm = rawTanggal.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (rawDdMm) {
+      return `${rawDdMm[3]}-${rawDdMm[2]}-${rawDdMm[1]}`;
+    }
+    return (sj.createdAt || '').slice(0, 10);
+  };
+
+  const sjPrefixCounts = useMemo(() => {
+    const counts = { ALL: suratJalanHistory.length, RMW: 0, FGW: 0, GBJ: 0 };
+    suratJalanHistory.forEach((sj) => {
+      const no = (sj.noSuratJalan || '').trim().toUpperCase();
+      if (no.includes('RMW')) counts.RMW += 1;
+      if (no.includes('FGW')) counts.FGW += 1;
+      if (no.includes('GBJ')) counts.GBJ += 1;
+    });
+    return counts;
+  }, [suratJalanHistory]);
+
+  // Filtered Riwayat Surat Jalan Terbit (pencarian, SPP/PO, kode No. SJ RMW/FGW/GBJ, dan rentang tanggal)
   const filteredSuratJalanHistory = useMemo(() => {
     const q = historySearch.trim().toLowerCase();
     return suratJalanHistory.filter((sj) => {
@@ -1792,6 +1840,18 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
 
       if (historyDocFilter === 'FILLED' && (!hasSpp && !hasPo)) return false;
       if (historyDocFilter === 'MISSING' && hasSpp && hasPo) return false;
+
+      if (historySjPrefixFilter !== 'ALL') {
+        const sjNoUpper = (sj.noSuratJalan || '').trim().toUpperCase();
+        if (!sjNoUpper.includes(historySjPrefixFilter)) return false;
+      }
+
+      if (historyDateFrom || historyDateTo) {
+        const sjDateIso = getSjFilterIsoDate(sj);
+        if (!sjDateIso) return false;
+        if (historyDateFrom && sjDateIso < historyDateFrom) return false;
+        if (historyDateTo && sjDateIso > historyDateTo) return false;
+      }
 
       if (!q) return true;
 
@@ -1822,7 +1882,14 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
         itemsText.includes(q)
       );
     });
-  }, [suratJalanHistory, historySearch, historyDocFilter]);
+  }, [
+    suratJalanHistory,
+    historySearch,
+    historyDocFilter,
+    historySjPrefixFilter,
+    historyDateFrom,
+    historyDateTo
+  ]);
 
   const handleStartInlineDocEdit = (sj: SuratJalanRecord) => {
     setInlineDocEditId(sj.id);
@@ -1906,6 +1973,115 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
             </button>
           </div>
         </div>
+
+        {/* Compact Google Sheets Auto-Sync Status Strip */}
+        {sheetsSyncStatus && (
+          <div className="mt-4 pt-3.5 border-t border-slate-100 dark:border-slate-800">
+            {sheetsSyncStatus.error ? (
+              <div className="px-3.5 py-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-800 flex flex-wrap items-center justify-between gap-2 text-xs text-rose-800 dark:text-rose-200">
+                <div className="flex items-center gap-2 min-w-0">
+                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                  <span className="truncate">
+                    <strong>Gagal Auto-Sync ke Spreadsheet:</strong> {sheetsSyncStatus.error}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    disabled={sheetsSyncStatus.isSyncing}
+                    onClick={() => {
+                      sheetsSyncStatus.onSyncNow().catch(() => {});
+                    }}
+                    className="px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-bold text-[11px] cursor-pointer disabled:opacity-50"
+                  >
+                    Coba Sync Ulang
+                  </button>
+                  <button
+                    type="button"
+                    onClick={sheetsSyncStatus.onOpenSheetsTab}
+                    className="px-2.5 py-1 rounded-lg bg-white dark:bg-slate-800 border border-rose-300 dark:border-rose-700 text-rose-700 dark:text-rose-200 font-semibold text-[11px] cursor-pointer"
+                  >
+                    Pengaturan Sheets
+                  </button>
+                </div>
+              </div>
+            ) : !sheetsSyncStatus.isBridgeConfigured || !sheetsSyncStatus.autoSyncEnabled ? (
+              <div className="px-3.5 py-2.5 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 flex flex-wrap items-center justify-between gap-2 text-xs text-amber-900 dark:text-amber-200">
+                <div className="flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                  <span>
+                    {!sheetsSyncStatus.isBridgeConfigured
+                      ? sheetsSyncStatus.syncMode === 'apps_script'
+                        ? 'Koneksi Google Sheets Bridge belum terpasang/tersimpan di Cloud — data SJ baru tersimpan di sistem aplikasi.'
+                        : 'Sesi Google OAuth belum login — data SJ belum masuk otomatis ke Spreadsheet.'
+                      : 'Auto-Sync Google Sheets belum diaktifkan — klik tombol di samping untuk mengaktifkan sinkronisasi otomatis.'}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={sheetsSyncStatus.onOpenSheetsTab}
+                  className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-bold text-[11px] shrink-0 cursor-pointer"
+                >
+                  Aktifkan di Google Sheets Sync &rarr;
+                </button>
+              </div>
+            ) : (
+              <div className="px-3.5 py-2 rounded-xl bg-emerald-50/70 dark:bg-emerald-950/25 border border-emerald-200 dark:border-emerald-800/70 flex flex-wrap items-center justify-between gap-2 text-xs text-emerald-900 dark:text-emerald-200">
+                <div className="flex flex-wrap items-center gap-2">
+                  <FileSpreadsheet
+                    className={`w-4 h-4 text-emerald-600 shrink-0 ${
+                      sheetsSyncStatus.isSyncing ? 'animate-pulse' : ''
+                    }`}
+                  />
+                  <span>
+                    {sheetsSyncStatus.isSyncing ? (
+                      <strong>Menyinkronkan Surat Jalan ke Google Sheets...</strong>
+                    ) : (
+                      <>
+                        <strong>Auto-Sync Spreadsheet Aktif</strong> &middot; SJ Pallet &rarr; tab{' '}
+                        <strong>&ldquo;Surat Jalan&rdquo;</strong>
+                        {!sheetsSyncStatus.includeSuratJalanTab && ' (Nonaktif)'}, SJ Tanpa Pallet &rarr;
+                        tab <strong>&ldquo;Surat Jalan Manual&rdquo;</strong>
+                        {!sheetsSyncStatus.includeManualSjTab && ' (Nonaktif)'}
+                      </>
+                    )}
+                  </span>
+                  {sheetsSyncStatus.bridgeVersion !== null &&
+                    sheetsSyncStatus.bridgeVersion !== undefined &&
+                    sheetsSyncStatus.bridgeVersion < 4 && (
+                      <span className="px-2 py-0.5 rounded-md bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-200 font-bold text-[10px]">
+                        Bridge v{sheetsSyncStatus.bridgeVersion} lama — perlu update v4 untuk SJ Manual
+                      </span>
+                    )}
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  {sheetsSyncStatus.lastSyncedAt && (
+                    <span className="text-[11px] text-emerald-700 dark:text-emerald-300">
+                      Terakhir:{' '}
+                      {new Date(sheetsSyncStatus.lastSyncedAt).toLocaleTimeString('id-ID', {
+                        hour: '2-digit',
+                        minute: '2-digit'
+                      })}
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    disabled={sheetsSyncStatus.isSyncing}
+                    onClick={() => {
+                      sheetsSyncStatus.onSyncNow().catch(() => {});
+                    }}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] cursor-pointer disabled:opacity-50"
+                  >
+                    <RefreshCw
+                      className={`w-3 h-3 ${sheetsSyncStatus.isSyncing ? 'animate-spin' : ''}`}
+                    />
+                    <span>{sheetsSyncStatus.isSyncing ? 'Syncing...' : 'Sync Sekarang'}</span>
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* SUB-TAB 1: BUAT SURAT JALAN */}
@@ -3450,62 +3626,165 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
 
           {/* Pencarian & Filter Data Surat Jalan Terbit */}
           {suratJalanHistory.length > 0 && (
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-2.5">
-              <div className="relative flex-1 max-w-xl">
-                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                <input
-                  type="text"
-                  value={historySearch}
-                  onChange={(e) => setHistorySearch(e.target.value)}
-                  placeholder="Cari No. SPP, No. PO, No. Surat Jalan, Nopol, Tujuan, Vendor, atau Barang..."
-                  className="w-full text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl pl-9 pr-8 py-2.5 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-                {historySearch && (
+            <div className="space-y-2.5">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-2.5">
+                <div className="relative flex-1 max-w-xl">
+                  <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={historySearch}
+                    onChange={(e) => setHistorySearch(e.target.value)}
+                    placeholder="Cari No. SPP, No. PO, No. Surat Jalan, Nopol, Tujuan, Vendor, atau Barang..."
+                    className="w-full text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl pl-9 pr-8 py-2.5 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  {historySearch && (
+                    <button
+                      type="button"
+                      onClick={() => setHistorySearch('')}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 cursor-pointer"
+                      title="Hapus pencarian"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex flex-wrap items-center gap-1 p-1 rounded-xl bg-slate-100 dark:bg-slate-800 text-xs font-semibold">
                   <button
                     type="button"
-                    onClick={() => setHistorySearch('')}
-                    className="absolute right-2.5 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 cursor-pointer"
-                    title="Hapus pencarian"
+                    onClick={() => setHistoryDocFilter('ALL')}
+                    className={`px-3 py-1.5 rounded-lg transition-colors whitespace-nowrap cursor-pointer ${
+                      historyDocFilter === 'ALL'
+                        ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs'
+                        : 'text-slate-600 dark:text-slate-300 hover:text-slate-900'
+                    }`}
                   >
-                    <X className="w-3.5 h-3.5" />
+                    Semua ({suratJalanHistory.length})
                   </button>
-                )}
+                  <button
+                    type="button"
+                    onClick={() => setHistoryDocFilter('MISSING')}
+                    className={`px-3 py-1.5 rounded-lg transition-colors whitespace-nowrap cursor-pointer ${
+                      historyDocFilter === 'MISSING'
+                        ? 'bg-amber-600 text-white shadow-xs'
+                        : 'text-slate-600 dark:text-slate-300 hover:text-slate-900'
+                    }`}
+                  >
+                    Belum Lengkap SPP/PO
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setHistoryDocFilter('FILLED')}
+                    className={`px-3 py-1.5 rounded-lg transition-colors whitespace-nowrap cursor-pointer ${
+                      historyDocFilter === 'FILLED'
+                        ? 'bg-emerald-600 text-white shadow-xs'
+                        : 'text-slate-600 dark:text-slate-300 hover:text-slate-900'
+                    }`}
+                  >
+                    Sudah Ada SPP/PO
+                  </button>
+                </div>
               </div>
 
-              <div className="flex flex-wrap items-center gap-1 p-1 rounded-xl bg-slate-100 dark:bg-slate-800 text-xs font-semibold">
-                <button
-                  type="button"
-                  onClick={() => setHistoryDocFilter('ALL')}
-                  className={`px-3 py-1.5 rounded-lg transition-colors whitespace-nowrap cursor-pointer ${
-                    historyDocFilter === 'ALL'
-                      ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs'
-                      : 'text-slate-600 dark:text-slate-300 hover:text-slate-900'
-                  }`}
-                >
-                  Semua ({suratJalanHistory.length})
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setHistoryDocFilter('MISSING')}
-                  className={`px-3 py-1.5 rounded-lg transition-colors whitespace-nowrap cursor-pointer ${
-                    historyDocFilter === 'MISSING'
-                      ? 'bg-amber-600 text-white shadow-xs'
-                      : 'text-slate-600 dark:text-slate-300 hover:text-slate-900'
-                  }`}
-                >
-                  Belum Lengkap SPP/PO
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setHistoryDocFilter('FILLED')}
-                  className={`px-3 py-1.5 rounded-lg transition-colors whitespace-nowrap cursor-pointer ${
-                    historyDocFilter === 'FILLED'
-                      ? 'bg-emerald-600 text-white shadow-xs'
-                      : 'text-slate-600 dark:text-slate-300 hover:text-slate-900'
-                  }`}
-                >
-                  Sudah Ada SPP/PO
-                </button>
+              {/* Filter Kode No. Surat Jalan (RMW, FGW, GBJ) & Filter Tanggal */}
+              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2.5 p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700/80 text-xs">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="inline-flex items-center gap-1.5 font-semibold text-slate-600 dark:text-slate-300">
+                    <Filter className="w-3.5 h-3.5 text-blue-600" />
+                    <span>No. Surat Jalan:</span>
+                  </span>
+                  <div className="flex flex-wrap items-center gap-1 p-0.5 rounded-lg bg-slate-200/70 dark:bg-slate-900 font-semibold">
+                    {(['ALL', 'RMW', 'FGW', 'GBJ'] as const).map((code) => {
+                      const active = historySjPrefixFilter === code;
+                      const label = code === 'ALL' ? 'Semua Kode' : code;
+                      const count = sjPrefixCounts[code];
+                      return (
+                        <button
+                          key={code}
+                          type="button"
+                          onClick={() => setHistorySjPrefixFilter(code)}
+                          className={`px-2.5 py-1 rounded-md transition-colors whitespace-nowrap cursor-pointer ${
+                            active
+                              ? 'bg-blue-600 text-white shadow-xs'
+                              : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                          }`}
+                        >
+                          {label} ({count})
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="inline-flex items-center gap-1.5 font-semibold text-slate-600 dark:text-slate-300">
+                    <Calendar className="w-3.5 h-3.5 text-blue-600" />
+                    <span>Tanggal:</span>
+                  </span>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <input
+                      type="date"
+                      value={historyDateFrom}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setHistoryDateFrom(val);
+                        if (val && historyDateTo && val > historyDateTo) {
+                          setHistoryDateTo(val);
+                        }
+                      }}
+                      aria-label="Filter tanggal dari"
+                      className="bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg px-2.5 py-1 text-xs font-medium text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                    <span className="text-slate-400 font-semibold">s/d</span>
+                    <input
+                      type="date"
+                      value={historyDateTo}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setHistoryDateTo(val);
+                        if (val && historyDateFrom && val < historyDateFrom) {
+                          setHistoryDateFrom(val);
+                        }
+                      }}
+                      aria-label="Filter tanggal sampai"
+                      className="bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg px-2.5 py-1 text-xs font-medium text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setHistoryDateFrom(todayIso);
+                        setHistoryDateTo(todayIso);
+                      }}
+                      className={`px-2.5 py-1 rounded-lg border text-[11px] font-semibold transition-colors cursor-pointer ${
+                        historyDateFrom === todayIso && historyDateTo === todayIso
+                          ? 'bg-blue-600 text-white border-blue-600'
+                          : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800'
+                      }`}
+                    >
+                      Hari Ini
+                    </button>
+                    {(historySearch ||
+                      historyDocFilter !== 'ALL' ||
+                      historySjPrefixFilter !== 'ALL' ||
+                      historyDateFrom ||
+                      historyDateTo) && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setHistorySearch('');
+                          setHistoryDocFilter('ALL');
+                          setHistorySjPrefixFilter('ALL');
+                          setHistoryDateFrom('');
+                          setHistoryDateTo('');
+                        }}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-[11px] font-semibold text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30 cursor-pointer"
+                      >
+                        <RotateCcw className="w-3 h-3" />
+                        <span>Reset</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
               </div>
             </div>
           )}
@@ -3534,18 +3813,21 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
             <div className="py-10 text-center space-y-2 bg-slate-50 dark:bg-slate-800/40 rounded-xl border border-dashed border-slate-200 dark:border-slate-700">
               <Search className="w-8 h-8 text-slate-400 mx-auto" />
               <p className="text-xs font-semibold text-slate-700 dark:text-slate-300">
-                Tidak ditemukan Surat Jalan dengan kata kunci "{historySearch || 'filter aktif'}".
+                Tidak ditemukan Surat Jalan dengan filter atau kata kunci "{historySearch || 'filter aktif'}".
               </p>
               <button
                 type="button"
                 onClick={() => {
                   setHistorySearch('');
                   setHistoryDocFilter('ALL');
+                  setHistorySjPrefixFilter('ALL');
+                  setHistoryDateFrom('');
+                  setHistoryDateTo('');
                 }}
                 className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-100 cursor-pointer"
               >
                 <RotateCcw className="w-3.5 h-3.5" />
-                <span>Reset Pencarian</span>
+                <span>Reset Filter &amp; Pencarian</span>
               </button>
             </div>
           ) : (
