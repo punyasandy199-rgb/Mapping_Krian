@@ -431,12 +431,12 @@ export const SuratJalanPrintModal: React.FC<SuratJalanPrintModalProps> = ({
 
   const renderSingleRecordToPdf = (doc: jsPDF, targetRecord: SuratJalanRecord) => {
     // True Portrait continuous form 21,5 x 28 cm (215mm x 280mm, height > width agar TIDAK miring/rotasi 90°).
-    // Margin atas 5.5mm agar kepala form tidak terpotong batas mekanis printer dot matriks.
+    // Margin atas & bawah konsisten 9mm agar kepala form tidak terpotong & bagian bawah tidak mepet di printer dot matriks.
     const pageWidth = 215;
-    const halfSheetLimitY = 135;
-    const marginX = 3.0;
-    const marginY = 5.5;
-    const contentWidth = pageWidth - marginX * 2; // 209mm
+    const halfSheetLimitY = 133;
+    const marginX = 4.0;
+    const marginY = 9.0;
+    const contentWidth = pageWidth - marginX * 2; // 207mm
     let currentY = marginY;
 
     const leftMetaRows = buildLeftMetaRows(targetRecord);
@@ -446,9 +446,9 @@ export const SuratJalanPrintModal: React.FC<SuratJalanPrintModalProps> = ({
     doc.setTextColor(0, 0, 0);
     doc.setLineWidth(0.32);
 
-    // 1. TOP HEADER BLOCK (21.6mm tinggi agar lega dan font lebih besar)
-    const rowH = 5.4;
-    const headerTotalH = rowH * 4; // 21.6mm
+    // 1. TOP HEADER BLOCK (20mm tinggi agar proporsional dengan margin atas/bawah 9mm)
+    const rowH = 5.0;
+    const headerTotalH = rowH * 4; // 20.0mm
     const col1W = contentWidth * 0.27;
     const col2W = contentWidth * 0.37;
     const col3W = contentWidth * 0.17;
@@ -553,21 +553,21 @@ export const SuratJalanPrintModal: React.FC<SuratJalanPrintModalProps> = ({
 
     currentY += metaH + 2.2;
 
-    // 3. ITEMS TABLE (Hitung ruang sisa agar kotak bawah selalu maksimal hingga ~131mm)
+    // 3. ITEMS TABLE (Hitung ruang sisa agar kotak bawah tetap proporsional dengan margin bawah konsisten)
     const itemCount = targetRecord.itemsSummary.length;
     const effectiveBodyRows = itemCount > 0 ? itemCount : 2;
-    const tableHeadH = 8.8;
-    const blankRowH = itemCount <= 1 ? 5.2 : 3.6;
-    const totalRowH = 6.6;
-    const noteH = itemCount > 3 ? 7.2 : 9.0;
-    const sigBoxH = itemCount > 3 ? 22.0 : 27.0;
-    const distReserve = 8.0; // gap + 2 baris distribusi
-    const gapsAfterHead = 2.2 + 2.2 + 3.2; // table->note, note->sig, sig->distribusi
+    const tableHeadH = 8.4;
+    const blankRowH = itemCount <= 1 ? 4.4 : 3.4;
+    const totalRowH = 6.2;
+    const noteH = itemCount > 3 ? 6.8 : 8.2;
+    const sigBoxH = itemCount > 3 ? 21.0 : 24.0;
+    const distReserve = 7.2; // gap + 2 baris distribusi
+    const gapsAfterHead = 2.0 + 2.0 + 2.8; // table->note, note->sig, sig->distribusi
 
     const fixedRemaining =
       tableHeadH + blankRowH + totalRowH + noteH + sigBoxH + distReserve + gapsAfterHead;
     const maxBodyBudget = Math.max(halfSheetLimitY - 1.5 - currentY - fixedRemaining, 10);
-    const idealItemRowH = itemCount === 1 ? 10.0 : itemCount === 0 ? 7.5 : 8.0;
+    const idealItemRowH = itemCount === 1 ? 9.0 : itemCount === 0 ? 6.8 : 7.5;
     const itemRowH = Math.max(
       4.8,
       Math.min(idealItemRowH, maxBodyBudget / effectiveBodyRows)
@@ -769,7 +769,7 @@ export const SuratJalanPrintModal: React.FC<SuratJalanPrintModalProps> = ({
 
     // 7. LANJUTAN LANGSUNG DI HALAMAN YANG SAMA: LIST ITEM / PALLET YANG DIAMBIL (1-2 spasi di bawah Distribusi)
     if (pickedRows.length > 0) {
-      const fullPageLimitY = 272;
+      const fullPageLimitY = 280 - marginY; // Konsisten dengan marginY (9mm atas & 9mm bawah)
       currentY += 6; // 1-2 spasi di bawah Distribusi
 
       if (currentY + 18 > fullPageLimitY) {
@@ -1701,13 +1701,13 @@ export const SuratJalanPrintModal: React.FC<SuratJalanPrintModalProps> = ({
       return (
         <div
           key={`${isPortal ? 'portal' : 'preview'}-${targetRecord.id}`}
-          className={`sj-print-sheet bg-white text-black w-full px-4 py-3 print:px-0 print:py-0 border border-black shadow-md overflow-visible ${
+          className={`sj-print-sheet sj-print-sheet-internal bg-white text-black w-full px-4 py-3 print:px-0 border border-black shadow-md overflow-visible ${
             isVisibleInPreview ? 'block' : 'hidden'
           } ${!isLastDoc ? 'sj-print-page-break' : ''}`}
           style={{ fontFamily: 'Arial, Helvetica, sans-serif' }}
         >
           {/* 1. HEADER BOX */}
-          <table className="w-full border-collapse border border-black text-[12px] print:text-[10px] leading-tight">
+          <table className="sj-avoid-break w-full border-collapse border border-black text-[12px] print:text-[10px] leading-tight">
             <colgroup>
               <col style={{ width: '27%' }} />
               <col style={{ width: '37%' }} />
@@ -1775,7 +1775,7 @@ export const SuratJalanPrintModal: React.FC<SuratJalanPrintModalProps> = ({
           </table>
 
           {/* 2. METADATA SECTION */}
-          <div className="mt-2 print:mt-1.5 grid grid-cols-12 border border-black text-[11.5px] print:text-[9.5px] leading-snug">
+          <div className="sj-avoid-break mt-2 print:mt-1.5 grid grid-cols-12 border border-black text-[11.5px] print:text-[9.5px] leading-snug">
             <div className="col-span-6 border-r border-black flex flex-col divide-y divide-black">
               {leftMetaRows.map((row) => (
                 <div key={row.label} className="grid grid-cols-12 flex-1">
@@ -1897,7 +1897,7 @@ export const SuratJalanPrintModal: React.FC<SuratJalanPrintModalProps> = ({
           </table>
 
           {/* 4. NOTE BOX */}
-          <div className="mt-2 print:mt-1.5 border border-black px-2.5 py-2 print:py-1 min-h-[34px] print:min-h-[24px] text-[11.5px] print:text-[10px] text-black flex items-center">
+          <div className="sj-avoid-break mt-2 print:mt-1.5 border border-black px-2.5 py-2 print:py-1 min-h-[34px] print:min-h-[24px] text-[11.5px] print:text-[10px] text-black flex items-center">
             <span>
               <span className="font-bold">Note : </span>
               <span>{targetRecord.note && targetRecord.note !== '-' ? targetRecord.note : ''}</span>
@@ -1905,7 +1905,7 @@ export const SuratJalanPrintModal: React.FC<SuratJalanPrintModalProps> = ({
           </div>
 
           {/* 5. SIGNATURES SECTION */}
-          <div className="mt-2 print:mt-1.5 grid grid-cols-4 border border-black divide-x divide-black text-center text-[11px] print:text-[9px]">
+          <div className="sj-avoid-break mt-2 print:mt-1.5 grid grid-cols-4 border border-black divide-x divide-black text-center text-[11px] print:text-[9px]">
             {['PENERIMA', 'TRANSPORTER', 'WAREHOUSE ADMIN', 'WAREHOUSE SPV.'].map((role) => (
               <div key={role} className="px-2.5 py-2 print:py-1 flex flex-col justify-between">
                 <div>
@@ -1930,7 +1930,7 @@ export const SuratJalanPrintModal: React.FC<SuratJalanPrintModalProps> = ({
           </div>
 
           {/* 6. DISTRIBUTION LEGEND */}
-          <div className="mt-2.5 print:mt-1.5 pt-0.5 text-[11px] print:text-[8.5px] text-black leading-snug">
+          <div className="sj-avoid-break mt-2.5 print:mt-1.5 pt-0.5 text-[11px] print:text-[8.5px] text-black leading-snug">
             <div className="font-bold text-black">Distribusi :</div>
             <div className="flex items-center justify-between gap-2 mt-0.5 text-black">
               <span>Putih : DAFT PT.SJA</span>
@@ -2059,7 +2059,7 @@ export const SuratJalanPrintModal: React.FC<SuratJalanPrintModalProps> = ({
           @media print {
             @page {
               size: ${printModel === 'external' ? 'A4 portrait' : '215mm 279mm portrait'};
-              margin: ${printModel === 'external' ? '5mm 2.5mm 6mm 2.5mm' : '6.5mm 3mm 5mm 3mm'};
+              margin: ${printModel === 'external' ? '5mm 2.5mm 6mm 2.5mm' : '10mm 4mm 10mm 4mm'};
             }
             html, body {
               background: #ffffff !important;
@@ -2085,12 +2085,32 @@ export const SuratJalanPrintModal: React.FC<SuratJalanPrintModalProps> = ({
               font-family: Arial, Helvetica, sans-serif !important;
               color: #000000 !important;
               border-color: #000000 !important;
+              box-sizing: border-box !important;
+            }
+            #sj-print-portal-root table {
+              page-break-inside: auto !important;
+            }
+            #sj-print-portal-root thead {
+              display: table-header-group !important;
+            }
+            #sj-print-portal-root tr,
+            #sj-print-portal-root .sj-avoid-break {
+              break-inside: avoid !important;
+              page-break-inside: avoid !important;
             }
             .sj-print-sheet {
               display: block !important;
               border: none !important;
               box-shadow: none !important;
               padding: 0 !important;
+              margin: 0 !important;
+              width: 100% !important;
+            }
+            .sj-print-sheet-internal {
+              display: block !important;
+              border: none !important;
+              box-shadow: none !important;
+              padding: 1mm 0 1mm 0 !important;
               margin: 0 !important;
               width: 100% !important;
             }

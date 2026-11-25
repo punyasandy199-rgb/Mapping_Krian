@@ -7,7 +7,6 @@ import {
   getWarehouseRackSlots
 } from '../types/warehouse';
 import {
-  Boxes,
   MapPin,
   Wrench,
   ArrowRight,
@@ -127,9 +126,11 @@ export const LocationPortalView: React.FC<LocationPortalViewProps> = ({
         <div className="max-w-6xl mx-auto flex items-center justify-between gap-4 sm:gap-8">
           {/* Zone 1: Brand Wordmark */}
           <div className="flex items-center gap-2.5 whitespace-nowrap shrink-0">
-            <div className="w-9 h-9 rounded-xl bg-blue-600 flex items-center justify-center text-white shadow-sm">
-              <Boxes className="w-5 h-5" />
-            </div>
+            <img
+              src="/assets/aistudio/image_73c65fac.png"
+              alt="Kapal Api"
+              className="h-10 w-auto object-contain bg-white shrink-0"
+            />
             <span className="text-base font-extrabold tracking-tight text-slate-950 dark:text-white">
               PalletTrack
             </span>

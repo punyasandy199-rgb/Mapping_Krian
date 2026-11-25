@@ -109,7 +109,6 @@ import {
   saveSheetsBridgeConfig
 } from './services/firebase';
 import {
-  Boxes,
   PlusCircle,
   Barcode,
   History,
@@ -127,7 +126,6 @@ import {
   Menu,
   X,
   UserCheck,
-  ArrowLeft,
   ClipboardCheck,
   Building2,
   CalendarClock,
@@ -2334,11 +2332,6 @@ export default function App() {
   const activeWarehouse =
     masterWarehouses.find((w) => w.id === activeWarehouseId) || null;
   const activeRackConfig = getWarehouseRackSlots(activeWarehouse);
-  const isGudang6Active = Boolean(
-    activeWarehouse &&
-      (activeWarehouse.namaGudang.toLowerCase().includes('6') ||
-        activeRackConfig.leftPrefix.startsWith('6'))
-  );
 
   // Daftar gudang dalam lokasi aktif (mis. Gd. KRIAN -> Gudang 05, Gudang 06, Gudang 07...)
   const locationGroupWarehouses = activeWarehouse
@@ -2517,10 +2510,15 @@ export default function App() {
     );
   }
 
+  const cleanWarehouseName = activeWarehouse.namaGudang.trim();
+  const denahWarehouseLabel = /^gudang\b/i.test(cleanWarehouseName)
+    ? `Denah ${cleanWarehouseName}`
+    : `Denah Gudang ${cleanWarehouseName}`;
+
   // Titles for current active view
   const tabTitles: Record<typeof activeTab, { title: string; subtitle: string }> = {
     input: {
-      title: 'Input Data Pallet & Cetak Barcode',
+      title: 'Penginputan data IC',
       subtitle: `Entri 1-8 baris pallet, scan otomatis, alokasi Bin ${activeRackConfig.leftPrefix}.1 s/d ${activeRackConfig.rightPrefix}.${activeRackConfig.rightCount}`
     },
     results: {
@@ -2532,9 +2530,7 @@ export default function App() {
       subtitle: 'Pelacakan stok pallet masuk, riwayat outbound, dan pengambilan muatan'
     },
     bin_map: {
-      title: `${isGudang6Active ? 'Peta Rak & Lokasi Bin' : 'Denah Rak & Lokasi Bin'} ${
-        activeWarehouse.namaGudang
-      }`,
+      title: denahWarehouseLabel,
       subtitle: `Visualisasi tata letak rak ${activeRackConfig.leftPrefix} dan ${activeRackConfig.rightPrefix} dengan status isi real-time`
     },
     notes_check: {
@@ -2565,34 +2561,9 @@ export default function App() {
           isMobileMenuOpen ? 'block' : 'hidden md:flex'
         }`}
       >
-        {/* Brand Header */}
+        {/* Brand Header (Klik Logo / PalletTrack untuk kembali ke Menu Lokasi Utama) */}
         <div className="p-4 sm:p-5 border-b border-slate-200 dark:border-slate-800">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-blue-600 flex items-center justify-center text-white shadow-md shadow-blue-500/20">
-                <Boxes className="w-5 h-5" />
-              </div>
-              <div>
-                <span className="text-base font-extrabold tracking-tight text-slate-950 dark:text-white block leading-none">
-                  PalletTrack
-                </span>
-                <span className="text-[11px] font-bold text-blue-600 dark:text-cyan-400">
-                  {activeWarehouse.locationGroup} · {activeWarehouse.namaGudang}
-                </span>
-              </div>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => setIsMobileMenuOpen(false)}
-              className="md:hidden p-1.5 text-slate-400 hover:text-white"
-            >
-              <X className="w-5 h-5" />
-            </button>
-          </div>
-
-          {/* Back to Main Location Portal Button */}
-          <div className="mt-3">
+          <div className="flex items-center justify-between gap-2">
             <button
               type="button"
               onClick={() => {
@@ -2600,16 +2571,31 @@ export default function App() {
                 setActiveWarehouseId(null);
                 setIsMobileMenuOpen(false);
               }}
-              className="w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-semibold bg-slate-100 dark:bg-slate-800/80 hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 transition-colors cursor-pointer"
-              title="Kembali ke pilihan lokasi Monitoring Produk IC — SJA 3"
+              className="flex items-center gap-2.5 text-left group cursor-pointer focus:outline-none transition-opacity hover:opacity-85 min-w-0"
+              title="Kembali ke Menu Lokasi Utama"
+              aria-label="PalletTrack — Kembali ke Menu Lokasi Utama"
             >
-              <span className="flex items-center gap-2">
-                <ArrowLeft className="w-3.5 h-3.5 text-slate-500" />
-                <span>Menu Lokasi Utama</span>
-              </span>
-              <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400">
-                SJA 3
-              </span>
+              <img
+                src="/assets/aistudio/image_73c65fac.png"
+                alt="Kapal Api"
+                className="h-11 w-auto object-contain bg-white shrink-0"
+              />
+              <div className="min-w-0">
+                <span className="text-base font-extrabold tracking-tight text-slate-950 dark:text-white group-hover:text-blue-600 dark:group-hover:text-cyan-400 transition-colors block leading-none">
+                  PalletTrack
+                </span>
+                <span className="text-[11px] font-bold text-blue-600 dark:text-cyan-400 mt-1 block truncate">
+                  {activeWarehouse.locationGroup} · {activeWarehouse.namaGudang}
+                </span>
+              </div>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setIsMobileMenuOpen(false)}
+              className="md:hidden p-1.5 text-slate-400 hover:text-white shrink-0"
+            >
+              <X className="w-5 h-5" />
             </button>
           </div>
 
@@ -2657,7 +2643,7 @@ export default function App() {
               >
                 <div className="flex items-center gap-2.5">
                   <PlusCircle className="w-4 h-4" />
-                  <span>Input Pallet (1-8 Data)</span>
+                  <span>Penginputan data IC</span>
                 </div>
               </button>
 
@@ -2725,11 +2711,7 @@ export default function App() {
               >
                 <div className="flex items-center gap-2.5">
                   <MapPin className="w-4 h-4" />
-                  <span>
-                    {isGudang6Active
-                      ? `Peta Bin ${activeWarehouse.namaGudang}`
-                      : `Denah Bin ${activeWarehouse.namaGudang}`}
-                  </span>
+                  <span>{denahWarehouseLabel}</span>
                 </div>
               </button>
 
@@ -2982,32 +2964,36 @@ export default function App() {
       <div className="flex-1 flex flex-col min-w-0 overflow-y-auto">
         {/* Mobile Header Bar */}
         <div className="md:hidden no-print flex items-center justify-between px-4 py-3 bg-white dark:bg-[#0f141c] border-b border-slate-200 dark:border-slate-800 sticky top-0 z-30">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center text-white">
-              <Boxes className="w-4 h-4" />
-            </div>
+          <button
+            type="button"
+            onClick={() => {
+              setPortalLocationGroup(null);
+              setActiveWarehouseId(null);
+              setIsMobileMenuOpen(false);
+            }}
+            className="flex items-center gap-2 text-left cursor-pointer hover:opacity-85 transition-opacity"
+            title="Kembali ke Menu Lokasi Utama"
+            aria-label="PalletTrack — Kembali ke Menu Lokasi Utama"
+          >
+            <img
+              src="/assets/aistudio/image_73c65fac.png"
+              alt="Kapal Api"
+              className="h-9 w-auto object-contain bg-white shrink-0"
+            />
             <div>
-              <span className="font-bold text-sm block leading-none">PalletTrack</span>
+              <span className="font-bold text-sm block leading-none text-slate-950 dark:text-white">
+                PalletTrack
+              </span>
               <span className="text-[10px] text-slate-500">{activeWarehouse.namaGudang}</span>
             </div>
-          </div>
+          </button>
 
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => {
-                setPortalLocationGroup(null);
-                setActiveWarehouseId(null);
-              }}
-              className="p-2 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200"
-              title="Kembali ke Menu Lokasi Utama"
-            >
-              <ArrowLeft className="w-4 h-4" />
-            </button>
-            <button
-              type="button"
               onClick={() => setIsScannerOpen(true)}
               className="p-2 rounded-lg bg-slate-100 dark:bg-slate-800"
+              title="Scan Kamera Barcode / QR Bin"
             >
               <Search className="w-4 h-4 text-blue-600" />
             </button>
@@ -3036,18 +3022,6 @@ export default function App() {
               <p className="text-xs text-slate-500 mt-0.5">
                 {tabTitles[activeTab]?.subtitle}
               </p>
-            </div>
-
-            {/* Quick Header Actions */}
-            <div className="flex items-center gap-2 shrink-0">
-              <button
-                type="button"
-                onClick={() => setIsScannerOpen(true)}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-blue-600 hover:bg-blue-700 text-white shadow-xs transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-              >
-                <Search className="w-3.5 h-3.5" />
-                <span>Scan QR Bin</span>
-              </button>
             </div>
           </div>
 

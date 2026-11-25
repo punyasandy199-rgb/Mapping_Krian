@@ -40,7 +40,8 @@ import {
   History,
   ChevronDown,
   AlertTriangle,
-  FileSpreadsheet
+  FileSpreadsheet,
+  Lock
 } from 'lucide-react';
 import { SuratJalanPrintModal, SuratJalanPrintModel } from './SuratJalanPrintModal';
 import { getPalletBatches } from '../utils/batchCalculator';
@@ -142,13 +143,18 @@ function extractGudangNumber(lokasiBin: string): string | null {
   return null;
 }
 
-// Generate auto No Surat Jalan like FGW/26/XI/032 (using max sequence of current month/year)
-function generateAutoSuratJalanNo(historyOrCount: SuratJalanRecord[] | number): string {
+type SjPrefixCode = 'GBJ' | 'FGW' | 'RMW';
+
+// Generate auto No Surat Jalan like FGW/26/XI/032, GBJ/26/XI/001, or RMW/26/XI/001 (using max sequence of current month/year)
+function generateAutoSuratJalanNo(
+  historyOrCount: SuratJalanRecord[] | number,
+  prefixCode: SjPrefixCode = 'FGW'
+): string {
   const now = new Date();
   const year2Dig = String(now.getFullYear()).slice(-2);
   const romanMonths = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 'XI', 'XII'];
   const romanMonth = romanMonths[now.getMonth()];
-  const prefix = `FGW/${year2Dig}/${romanMonth}/`;
+  const prefix = `${prefixCode}/${year2Dig}/${romanMonth}/`;
 
   let nextSeq = typeof historyOrCount === 'number' ? historyOrCount + 1 : historyOrCount.length + 1;
   if (Array.isArray(historyOrCount)) {
@@ -272,7 +278,7 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
   const [customVendorNama, setCustomVendorNama] = useState<string>('');
   const [tarif, setTarif] = useState<number>(0);
   const [ppnPersen, setPpnPersen] = useState<number>(0);
-  const [ppnInputText, setPpnInputText] = useState<string>('0');
+  const [, setPpnInputText] = useState<string>('0');
 
   const [noSpp, setNoSpp] = useState<string>('');
   const [noPo, setNoPo] = useState<string>('');
@@ -281,7 +287,8 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
   const [noInvoice, setNoInvoice] = useState<string>('');
   const [tglJamCetakCustom, setTglJamCetakCustom] = useState<string>('');
 
-  const initialSjNo = generateAutoSuratJalanNo(suratJalanHistory);
+  const [sjPrefixCode, setSjPrefixCode] = useState<SjPrefixCode>('FGW');
+  const initialSjNo = generateAutoSuratJalanNo(suratJalanHistory, 'FGW');
   const [noSuratJalan, setNoSuratJalan] = useState<string>(initialSjNo);
   const hasManualSjNoEditRef = useRef<boolean>(false);
 
@@ -340,7 +347,7 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
   // Edit modal state (Riwayat Surat Jalan)
   const [editingRecord, setEditingRecord] = useState<SuratJalanRecord | null>(null);
   const [editTglJamInput, setEditTglJamInput] = useState<string>('');
-  const [editPpnText, setEditPpnText] = useState<string>('0');
+  const [, setEditPpnText] = useState<string>('0');
   const [editError, setEditError] = useState<string | null>(null);
   const [isSavingEdit, setIsSavingEdit] = useState<boolean>(false);
   const [editSuccessMsg, setEditSuccessMsg] = useState<string | null>(null);
@@ -360,10 +367,10 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
   const [inlineNoPo, setInlineNoPo] = useState<string>('');
   const [isSavingInlineDoc, setIsSavingInlineDoc] = useState<boolean>(false);
 
-  // Update auto SJ number cleanly when Firestore history finishes loading (if user hasn't edited it manually)
-  useEffect(() => {
-    if (hasManualSjNoEditRef.current) return;
-    const computed = generateAutoSuratJalanNo(suratJalanHistory);
+  const handleSelectSjPrefixCode = (code: SjPrefixCode) => {
+    setSjPrefixCode(code);
+    hasManualSjNoEditRef.current = false;
+    const computed = generateAutoSuratJalanNo(suratJalanHistory, code);
     setNoSuratJalan(computed);
     setArmadaEntries((prev) =>
       prev.map((entry, idx) => ({
@@ -371,7 +378,20 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
         noSuratJalan: idx === 0 ? computed : incrementSuratJalanNo(computed, idx)
       }))
     );
-  }, [suratJalanHistory]);
+  };
+
+  // Update auto SJ number cleanly when Firestore history finishes loading (if user hasn't edited it manually)
+  useEffect(() => {
+    if (hasManualSjNoEditRef.current) return;
+    const computed = generateAutoSuratJalanNo(suratJalanHistory, sjPrefixCode);
+    setNoSuratJalan(computed);
+    setArmadaEntries((prev) =>
+      prev.map((entry, idx) => ({
+        ...entry,
+        noSuratJalan: idx === 0 ? computed : incrementSuratJalanNo(computed, idx)
+      }))
+    );
+  }, [suratJalanHistory, sjPrefixCode]);
 
   // Build Vehicle Nopol History Index (sorted newest first)
   const vehicleHistoryList = useMemo<VehicleNopolHistoryEntry[]>(() => {
@@ -616,13 +636,12 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
       setPpnPersen(0);
       setPpnInputText('0');
     } else {
-      // Tidak ada tarif terdaftar di master -> fallback default rute atau 0
+      // Tidak ada tarif terdaftar di master -> bekukan tarif/PPN ke 0 hingga didaftarkan di User Management
       setSelectedVendorId('');
       setCustomVendorNama('');
-      setTarif(ruteTujuanObj.tarifDefault && ruteTujuanObj.tarifDefault > 0 ? ruteTujuanObj.tarifDefault : 0);
-      const defPpn = ruteTujuanObj.ppnPersen ?? 0;
-      setPpnPersen(defPpn);
-      setPpnInputText(String(defPpn).replace('.', ','));
+      setTarif(0);
+      setPpnPersen(0);
+      setPpnInputText('0');
     }
   }, [selectedDariId, selectedTujuanId, ruteDariObj, ruteTujuanObj, matchingTariffs]);
 
@@ -690,54 +709,6 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
     setTarif(t.tarif);
     setPpnPersen(t.ppnPersen);
     setPpnInputText(String(t.ppnPersen).replace('.', ','));
-  };
-
-  // Kumpulan nama vendor unik dari Master Tujuan & Tarif yang belum ada di Master Armada
-  const tariffOnlyVendorNames = useMemo(() => {
-    const armadaSet = new Set(
-      masterVendors.map((v) => v.namaVendor.trim().toUpperCase())
-    );
-    const seen = new Set<string>();
-    const list: string[] = [];
-    masterTariffs.forEach((t) => {
-      const name = (t.vendor || '').trim();
-      const upper = name.toUpperCase();
-      if (name && !armadaSet.has(upper) && !seen.has(upper)) {
-        seen.add(upper);
-        list.push(name);
-      }
-    });
-    return list;
-  }, [masterVendors, masterTariffs]);
-
-  const handleVendorChange = (val: string) => {
-    setSelectedVendorId(val);
-    if (!val) {
-      setCustomVendorNama('');
-      return;
-    }
-    if (val.startsWith('tariff-')) {
-      const tariffId = val.replace('tariff-', '');
-      const t = masterTariffs.find((mt) => mt.id === tariffId);
-      if (t) {
-        handleSelectTariffCard(t);
-      }
-    } else if (val.startsWith('tname-')) {
-      const vendorName = val.slice('tname-'.length);
-      setCustomVendorNama(vendorName);
-    } else if (val === 'custom') {
-      setCustomVendorNama('');
-    } else {
-      const v = masterVendors.find((mv) => mv.id === val);
-      if (v) {
-        setCustomVendorNama(v.namaVendor);
-        if (v.tarifDefault !== undefined && tarif === 0) setTarif(v.tarifDefault);
-        if (v.ppnPersen !== undefined) {
-          setPpnPersen(v.ppnPersen);
-          setPpnInputText(String(v.ppnPersen).replace('.', ','));
-        }
-      }
-    }
   };
 
   // Kumpulan ID pallet yang sudah pernah diambil/dimuat ke Surat Jalan sebelumnya
@@ -865,7 +836,7 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
     setJumlahSuratJalan(count);
     setActiveSjIndex((prev) => Math.min(prev, count - 1));
 
-    const baseSj = noSuratJalan.trim() || generateAutoSuratJalanNo(suratJalanHistory);
+    const baseSj = noSuratJalan.trim() || generateAutoSuratJalanNo(suratJalanHistory, sjPrefixCode);
     setArmadaEntries((prev) => {
       const next: SuratJalanArmadaEntry[] = [];
       for (let i = 0; i < count; i++) {
@@ -1357,7 +1328,7 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
       const formattedTanggalCetak = formatDateOnlyIndoFromDate(effectivePrintDate);
       const formattedWaktuCetak = formatWaktuCetakIndoFromDate(effectivePrintDate);
 
-      const baseNo = noSuratJalan.trim() || generateAutoSuratJalanNo(suratJalanHistory);
+      const baseNo = noSuratJalan.trim() || generateAutoSuratJalanNo(suratJalanHistory, sjPrefixCode);
       const createdRecords: SuratJalanRecord[] = [];
 
       for (let i = 0; i < jumlahSuratJalan; i++) {
@@ -1443,7 +1414,10 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
 
       // Reset form & regenerate next sequential No. SJ
       hasManualSjNoEditRef.current = false;
-      const nextBaseNo = generateAutoSuratJalanNo([...suratJalanHistory, ...createdRecords]);
+      const nextBaseNo = generateAutoSuratJalanNo(
+        [...suratJalanHistory, ...createdRecords],
+        sjPrefixCode
+      );
       setPalletAssignments({});
       setManualItemsBySj({});
       setAutoFilledMetaBySlot({});
@@ -1483,6 +1457,20 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
 
   const handleCreateSuratJalan = async () => {
     setFormError(null);
+
+    if (!selectedDariId || !selectedTujuanId) {
+      setFormError('Pilih Rute Asal dan Rute Tujuan terlebih dahulu.');
+      return;
+    }
+
+    if (!selectedVendorId || !selectedVendorId.startsWith('tariff-')) {
+      setFormError(
+        matchingTariffs.length === 0
+          ? 'Belum ada Vendor Armada & Tarif terdaftar untuk rute ini. Silakan input terlebih dahulu melalui User Management / Kontak Admin → Tujuan & Tarif.'
+          : 'Pilih Vendor Armada & Tarif Pengiriman terlebih dahulu.'
+      );
+      return;
+    }
 
     const activeSlots = armadaEntries.slice(0, jumlahSuratJalan);
     const missingNopolIdx = activeSlots.findIndex((s) => !s.noPolisi.trim());
@@ -1881,6 +1869,27 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
         (sj.noInvoice || '').toLowerCase().includes(q) ||
         itemsText.includes(q)
       );
+    }).sort((a, b) => {
+      const dateA = getSjFilterIsoDate(a) || '';
+      const dateB = getSjFilterIsoDate(b) || '';
+      if (dateA !== dateB) {
+        return dateB.localeCompare(dateA);
+      }
+      const parseTimeSeconds = (sj: SuratJalanRecord): number => {
+        const w = (sj.waktuCetakFormatted || sj.tglJamCetakCustom || '').trim();
+        const m = w.match(/(?:T|,\s*)(\d{2})[:.](\d{2})(?:[:.](\d{2}))?/);
+        if (m) {
+          return Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3] || 0);
+        }
+        const createdMs = new Date(sj.createdAt || 0).getTime();
+        return isNaN(createdMs) ? 0 : createdMs;
+      };
+      const timeDiff = parseTimeSeconds(b) - parseTimeSeconds(a);
+      if (timeDiff !== 0) return timeDiff;
+      const createdDiff =
+        new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+      if (createdDiff !== 0) return createdDiff;
+      return (b.noSuratJalan || '').localeCompare(a.noSuratJalan || '', undefined, { numeric: true });
     });
   }, [
     suratJalanHistory,
@@ -2129,15 +2138,45 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
               </div>
 
               <div className="md:col-span-3">
-                <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  No. Surat Jalan *
-                </label>
+                <div className="flex items-center justify-between gap-1.5 mb-1">
+                  <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300">
+                    No. Surat Jalan *
+                  </label>
+                  <div
+                    className="inline-flex items-center p-0.5 rounded-md bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700"
+                    role="group"
+                    aria-label="Pilih awalan kode Surat Jalan"
+                  >
+                    {(['GBJ', 'FGW', 'RMW'] as const).map((code) => {
+                      const isActive = sjPrefixCode === code;
+                      return (
+                        <button
+                          key={code}
+                          type="button"
+                          onClick={() => handleSelectSjPrefixCode(code)}
+                          className={`px-1.5 py-0.5 rounded text-[10px] font-bold leading-none transition-colors cursor-pointer ${
+                            isActive
+                              ? 'bg-blue-600 text-white shadow-2xs'
+                              : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                          }`}
+                          title={`Gunakan format awalan ${code}/...`}
+                        >
+                          {code}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
                 <input
                   type="text"
                   value={noSuratJalan}
                   onChange={(e) => {
                     hasManualSjNoEditRef.current = true;
                     const val = e.target.value.toUpperCase();
+                    const prefixMatch = val.match(/^(GBJ|FGW|RMW)(?:\/|$)/);
+                    if (prefixMatch) {
+                      setSjPrefixCode(prefixMatch[1] as SjPrefixCode);
+                    }
                     setNoSuratJalan(val);
                     setArmadaEntries((prev) =>
                       prev.map((entry, idx) => ({
@@ -2146,7 +2185,7 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
                       }))
                     );
                   }}
-                  placeholder="FGW/26/XI/032"
+                  placeholder={`${sjPrefixCode}/26/XI/001`}
                   className="w-full font-mono font-bold uppercase bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-blue-600 dark:text-blue-400"
                 />
               </div>
@@ -2277,23 +2316,50 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
                 )}
               </div>
 
-              {/* Row 4: Pilihan Vendor & Harga Kesamping + PPN Kecil & Total Tarif di Bawahnya */}
-              <div className="md:col-span-12 bg-slate-50/70 dark:bg-slate-800/30 border border-slate-200 dark:border-slate-700/70 rounded-xl p-3.5 space-y-3">
+              {/* Row 4: Pilihan Vendor & Harga Kesamping (Beku jika Rute Asal/Tujuan belum terpilih, tanpa Vendor Lainnya, Tarif & PPN dikunci) */}
+              <div
+                className={`md:col-span-12 rounded-xl p-3.5 space-y-3 border transition-colors ${
+                  !selectedDariId || !selectedTujuanId
+                    ? 'bg-slate-100/90 dark:bg-slate-900/70 border-slate-200 dark:border-slate-800 opacity-75'
+                    : 'bg-slate-50/70 dark:bg-slate-800/30 border-slate-200 dark:border-slate-700/70'
+                }`}
+              >
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <label className="text-[11px] font-bold text-slate-700 dark:text-slate-200 flex items-center gap-1.5">
-                    <Truck className="w-3.5 h-3.5 text-blue-600" />
+                    {!selectedDariId || !selectedTujuanId ? (
+                      <Lock className="w-3.5 h-3.5 text-slate-500" />
+                    ) : (
+                      <Truck className="w-3.5 h-3.5 text-blue-600" />
+                    )}
                     <span>Pilih Vendor Armada &amp; Tarif Pengiriman *</span>
                   </label>
-                  {selectedDariId && selectedTujuanId && matchingTariffs.length > 0 && (
+                  {!selectedDariId || !selectedTujuanId ? (
+                    <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-slate-600 dark:text-slate-300 bg-slate-200/80 dark:bg-slate-800 px-2.5 py-0.5 rounded-full">
+                      <Lock className="w-3 h-3" />
+                      <span>Beku — Pilih Rute Asal &amp; Tujuan Terlebih Dahulu</span>
+                    </span>
+                  ) : matchingTariffs.length > 0 ? (
                     <span className="text-[11px] font-semibold text-blue-700 dark:text-blue-300 bg-blue-100/80 dark:bg-blue-950 px-2 py-0.5 rounded-full">
                       {matchingTariffs.length} Pilihan Vendor Tersedia — Silakan Pilih
+                    </span>
+                  ) : (
+                    <span className="text-[11px] font-semibold text-amber-700 dark:text-amber-300 bg-amber-100/80 dark:bg-amber-950/60 px-2 py-0.5 rounded-full">
+                      Belum Ada Vendor Terdaftar pada Rute Ini
                     </span>
                   )}
                 </div>
 
-                {/* Pilihan Vendor Kesamping apabila Rute Asal & Tujuan sudah diketahui */}
-                {selectedDariId && selectedTujuanId && matchingTariffs.length > 0 ? (
-                  <div className="space-y-2.5">
+                {/* Pilihan Vendor Kesamping apabila Rute Asal & Tujuan sudah terpilih */}
+                {!selectedDariId || !selectedTujuanId ? (
+                  <div className="p-3 rounded-lg bg-white/70 dark:bg-slate-900/50 border border-dashed border-slate-300 dark:border-slate-700 text-[11px] text-slate-500 dark:text-slate-400 flex items-center gap-2 cursor-not-allowed select-none">
+                    <Lock className="w-4 h-4 text-slate-400 shrink-0" />
+                    <span>
+                      Daftar pilihan Vendor Armada dan Tarif Pengiriman dikunci sementara hingga{' '}
+                      <strong>Rute Asal</strong> dan <strong>Rute Tujuan</strong> dipilih.
+                    </span>
+                  </div>
+                ) : matchingTariffs.length > 0 ? (
+                  <div className="space-y-2">
                     <div className="flex flex-wrap items-stretch gap-2">
                       {matchingTariffs.map((t) => {
                         const isPicked = selectedVendorId === `tariff-${t.id}`;
@@ -2337,142 +2403,27 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
                           </button>
                         );
                       })}
-
-                      {/* Opsi pilih vendor lain / input manual */}
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSelectedVendorId('other');
-                          setCustomVendorNama('');
-                          setTarif(0);
-                          setPpnPersen(0);
-                          setPpnInputText('0');
-                        }}
-                        className={`flex items-center gap-1.5 px-3 py-2 rounded-lg border text-[11px] font-semibold transition-all cursor-pointer ${
-                          selectedVendorId && !selectedVendorId.startsWith('tariff-')
-                            ? 'bg-slate-800 text-white border-slate-800 dark:bg-slate-200 dark:text-slate-900'
-                            : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-dashed border-slate-300 dark:border-slate-600 hover:border-slate-400'
-                        }`}
-                      >
-                        <Plus className="w-3.5 h-3.5" />
-                        <span>Vendor Lainnya</span>
-                      </button>
                     </div>
-
-                    {/* Input tambahan jika petugas memilih Vendor Lainnya */}
-                    {selectedVendorId && !selectedVendorId.startsWith('tariff-') && (
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1">
-                        <select
-                          value={selectedVendorId === 'other' ? '' : selectedVendorId}
-                          onChange={(e) => handleVendorChange(e.target.value)}
-                          className="w-full bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-1.5 text-xs text-slate-900 dark:text-slate-100 font-medium"
-                        >
-                          <option value="">-- Pilih Master Vendor --</option>
-                          {tariffOnlyVendorNames.length > 0 && (
-                            <optgroup label="Vendor dari Master Tujuan &amp; Tarif">
-                              {tariffOnlyVendorNames.map((vName) => (
-                                <option key={vName} value={`tname-${vName}`}>
-                                  {vName}
-                                </option>
-                              ))}
-                            </optgroup>
-                          )}
-                          {masterVendors.length > 0 && (
-                            <optgroup label="Daftar Master Armada">
-                              {masterVendors.map((v) => (
-                                <option key={v.id} value={v.id}>
-                                  {v.namaVendor}
-                                </option>
-                              ))}
-                            </optgroup>
-                          )}
-                          <option value="custom">+ Tulis Nama Vendor Manual</option>
-                        </select>
-                        {selectedVendorId === 'custom' && (
-                          <input
-                            type="text"
-                            value={customVendorNama}
-                            onChange={(e) => setCustomVendorNama(e.target.value.toUpperCase())}
-                            placeholder="KETIK NAMA VENDOR ARMADA..."
-                            className="w-full uppercase bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-1.5 text-xs"
-                          />
-                        )}
-                        <div className="flex items-center gap-2">
-                          <span className="text-[11px] text-slate-500 whitespace-nowrap">Tarif (Rp):</span>
-                          <input
-                            type="number"
-                            min="0"
-                            value={tarif}
-                            onChange={(e) => setTarif(parseFloat(e.target.value) || 0)}
-                            placeholder="0"
-                            className="w-full font-mono bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-1.5 text-xs font-bold text-slate-900 dark:text-slate-100"
-                          />
-                        </div>
-                      </div>
-                    )}
+                    <p className="text-[10px] text-slate-500 dark:text-slate-400 flex items-center gap-1">
+                      <Lock className="w-3 h-3 text-slate-400 shrink-0" />
+                      <span>
+                        Apabila ada vendor lain di luar daftar, wajib didaftarkan terlebih dahulu melalui{' '}
+                        <strong>User Management / Kontak Admin &rarr; Tujuan &amp; Tarif</strong>.
+                      </span>
+                    </p>
                   </div>
                 ) : (
-                  /* Fallback sebelum Rute Asal & Tujuan dipilih, atau jika tidak ada tarif terdaftar untuk rute tersebut */
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div>
-                      <select
-                        value={selectedVendorId}
-                        onChange={(e) => handleVendorChange(e.target.value)}
-                        className="w-full bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-100 font-medium"
-                      >
-                        <option value="">
-                          {!selectedDariId || !selectedTujuanId
-                            ? '-- Pilih Rute Asal & Tujuan terlebih dahulu (atau pilih vendor) --'
-                            : '-- Pilih Vendor Armada --'}
-                        </option>
-                        {tariffOnlyVendorNames.length > 0 && (
-                          <optgroup label="Vendor dari Master Tujuan &amp; Tarif">
-                            {tariffOnlyVendorNames.map((vName) => (
-                              <option key={vName} value={`tname-${vName}`}>
-                                {vName}
-                              </option>
-                            ))}
-                          </optgroup>
-                        )}
-                        {masterVendors.length > 0 && (
-                          <optgroup label="Daftar Master Armada">
-                            {masterVendors.map((v) => (
-                              <option key={v.id} value={v.id}>
-                                {v.namaVendor}
-                              </option>
-                            ))}
-                          </optgroup>
-                        )}
-                        <option value="custom">+ Tulis Manual / Lainnya</option>
-                      </select>
-                      {selectedVendorId === 'custom' && (
-                        <input
-                          type="text"
-                          value={customVendorNama}
-                          onChange={(e) => setCustomVendorNama(e.target.value.toUpperCase())}
-                          placeholder="MASUKKAN NAMA VENDOR ARMADA..."
-                          className="w-full mt-1.5 uppercase bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-1.5 text-xs"
-                        />
-                      )}
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      <span className="text-[11px] font-semibold text-slate-600 dark:text-slate-300 whitespace-nowrap">
-                        Tarif (Rp):
-                      </span>
-                      <input
-                        type="number"
-                        min="0"
-                        value={tarif}
-                        onChange={(e) => setTarif(parseFloat(e.target.value) || 0)}
-                        placeholder="0"
-                        className="w-full font-mono bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-100 font-bold"
-                      />
-                    </div>
+                  <div className="p-3 rounded-lg bg-amber-50/80 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 text-[11px] text-amber-800 dark:text-amber-200 flex items-start gap-2">
+                    <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                    <span>
+                      Belum ada Vendor Armada &amp; Tarif terdaftar untuk kombinasi rute ini.
+                      Apabila ada vendor lain selain di list, harap input terlebih dahulu melalui{' '}
+                      <strong>User Management / Kontak Admin &rarr; Tujuan &amp; Tarif</strong>.
+                    </span>
                   </div>
                 )}
 
-                {/* Bagian Bawah: PPN tampilan kecil + Total Tarif (Rp) */}
+                {/* Bagian Bawah: Tarif & PPN dikunci (read-only) + Total Tarif (Rp) */}
                 <div className="flex flex-wrap items-center justify-between gap-3 pt-2.5 border-t border-slate-200/80 dark:border-slate-700/70 text-[11px]">
                   <div className="flex flex-wrap items-center gap-3 text-slate-600 dark:text-slate-300">
                     {customVendorNama && (
@@ -2481,26 +2432,19 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
                         <span className="font-bold text-slate-800 dark:text-slate-100">{customVendorNama}</span>
                       </div>
                     )}
-                    <div className="flex items-center gap-1">
-                      <span className="text-slate-400">Tarif:</span>
-                      <span className="font-mono font-semibold text-slate-700 dark:text-slate-200">
+                    <div className="flex items-center gap-1.5 bg-slate-100 dark:bg-slate-800/90 border border-slate-200 dark:border-slate-700 rounded-md px-2 py-0.5 cursor-not-allowed">
+                      <Lock className="w-3 h-3 text-slate-400 shrink-0" />
+                      <span className="text-slate-500">Tarif:</span>
+                      <span className="font-mono font-bold text-slate-700 dark:text-slate-200">
                         Rp {tarif.toLocaleString('id-ID')}
                       </span>
                     </div>
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-slate-500 font-medium">PPN (%):</span>
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        value={ppnInputText}
-                        onChange={(e) => {
-                          setPpnInputText(e.target.value);
-                          const parsed = parseFloat(e.target.value.replace(',', '.'));
-                          setPpnPersen(isNaN(parsed) || parsed < 0 ? 0 : parsed);
-                        }}
-                        placeholder="0"
-                        className="w-12 font-mono text-[11px] text-center bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded px-1.5 py-0.5 text-slate-900 dark:text-slate-100 font-bold focus:outline-none focus:ring-1 focus:ring-blue-500"
-                      />
+                    <div className="flex items-center gap-1.5 bg-slate-100 dark:bg-slate-800/90 border border-slate-200 dark:border-slate-700 rounded-md px-2 py-0.5 cursor-not-allowed">
+                      <Lock className="w-3 h-3 text-slate-400 shrink-0" />
+                      <span className="text-slate-500 font-medium">PPN:</span>
+                      <span className="font-mono font-bold text-slate-700 dark:text-slate-200">
+                        {String(ppnPersen).replace('.', ',')}%
+                      </span>
                       <span className="text-[10px] text-slate-400 font-mono">
                         (Rp {Math.round((tarif * ppnPersen) / 100).toLocaleString('id-ID')})
                       </span>
@@ -4416,19 +4360,17 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
                 </div>
 
                 <div>
-                  <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    Vendor Armada
+                  <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1 flex items-center gap-1">
+                    <Lock className="w-3 h-3 text-slate-400" />
+                    <span>Vendor Armada (Dikunci)</span>
                   </label>
                   <input
                     type="text"
                     value={editingRecord.namaVendorArmada}
-                    onChange={(e) =>
-                      setEditingRecord({
-                        ...editingRecord,
-                        namaVendorArmada: e.target.value.toUpperCase()
-                      })
-                    }
-                    className="w-full uppercase bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2"
+                    readOnly
+                    disabled
+                    title="Vendor hanya dapat diatur melalui User Management / Kontak Admin"
+                    className="w-full uppercase bg-slate-100 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-600 dark:text-slate-300 font-semibold cursor-not-allowed"
                   />
                 </div>
 
@@ -4463,44 +4405,36 @@ export const SuratJalanView: React.FC<SuratJalanViewProps> = ({
                 })()}
 
                 <div>
-                  <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    Tarif (Rp)
+                  <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1 flex items-center gap-1">
+                    <Lock className="w-3 h-3 text-slate-400" />
+                    <span>Tarif (Rp) — Dikunci</span>
                   </label>
                   <input
-                    type="number"
-                    min="0"
-                    value={editingRecord.tarif ?? 0}
-                    onChange={(e) =>
-                      setEditingRecord({
-                        ...editingRecord,
-                        tarif: parseFloat(e.target.value) || 0
-                      })
-                    }
-                    className="w-full font-mono font-bold bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2"
+                    type="text"
+                    value={`Rp ${(editingRecord.tarif ?? 0).toLocaleString('id-ID')}`}
+                    readOnly
+                    disabled
+                    title="Tarif tidak dapat diedit melalui Surat Jalan"
+                    className="w-full font-mono font-bold bg-slate-100 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-600 dark:text-slate-300 cursor-not-allowed"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    PPN (%) — Total: Rp{' '}
+                  <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1 flex items-center gap-1">
+                    <Lock className="w-3 h-3 text-slate-400" />
+                    <span>PPN (%) — Total: Rp{' '}
                     {Math.round(
                       (editingRecord.tarif || 0) +
                         ((editingRecord.tarif || 0) * (editingRecord.ppnPersen || 0)) / 100
-                    ).toLocaleString('id-ID')}
+                    ).toLocaleString('id-ID')}</span>
                   </label>
                   <input
                     type="text"
-                    inputMode="decimal"
-                    value={editPpnText}
-                    onChange={(e) => {
-                      setEditPpnText(e.target.value);
-                      const parsed = parseFloat(e.target.value.replace(',', '.'));
-                      setEditingRecord({
-                        ...editingRecord,
-                        ppnPersen: isNaN(parsed) || parsed < 0 ? 0 : parsed
-                      });
-                    }}
-                    className="w-full font-mono font-bold bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2"
+                    value={`${String(editingRecord.ppnPersen ?? 0).replace('.', ',')}%`}
+                    readOnly
+                    disabled
+                    title="PPN tidak dapat diedit melalui Surat Jalan"
+                    className="w-full font-mono font-bold bg-slate-100 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-600 dark:text-slate-300 cursor-not-allowed"
                   />
                 </div>
 
