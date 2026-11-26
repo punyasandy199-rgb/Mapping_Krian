@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import kapalApiLogo from './assets/kapal-api-logo.png';
 import { User } from 'firebase/auth';
 import {
   PalletRecord,
@@ -2576,7 +2577,7 @@ export default function App() {
               aria-label="PalletTrack — Kembali ke Menu Lokasi Utama"
             >
               <img
-                src="/assets/aistudio/image_73c65fac.png"
+                src={kapalApiLogo}
                 alt="Kapal Api"
                 className="h-11 w-auto object-contain bg-white shrink-0"
               />
@@ -2976,7 +2977,7 @@ export default function App() {
             aria-label="PalletTrack — Kembali ke Menu Lokasi Utama"
           >
             <img
-              src="/assets/aistudio/image_73c65fac.png"
+              src={kapalApiLogo}
               alt="Kapal Api"
               className="h-9 w-auto object-contain bg-white shrink-0"
             />
@@ -3195,6 +3196,9 @@ export default function App() {
               records={records}
               suratJalanHistory={suratJalanHistory}
               activeWarehouse={activeWarehouse}
+              masterItems={masterItems}
+              masterWarehouses={masterWarehouses}
+              onUpdateRecord={handleUpdateRecord}
               onOpenHistory={() => setActiveTab('history')}
             />
           )}

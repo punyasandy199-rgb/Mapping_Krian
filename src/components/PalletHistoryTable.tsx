@@ -181,14 +181,7 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
   // Open Edit Modal
   const handleStartEditRecord = (record: PalletRecord) => {
     const existingBatches = getPalletBatches(record);
-    const resolvedWh = resolvePalletWarehouseLocation(record, masterWarehouses);
-    setEditingRecord({
-      ...record,
-      statusQc: resolvePalletQcStatus(record),
-      lokasiGudang: record.lokasiGudang || resolvedWh,
-      gudangAsal: record.gudangAsal || record.operHistory?.[0]?.dariGudang || ''
-    });
-    setEditBatches(
+    const initialBatches: PalletBatchEntry[] =
       existingBatches.length > 0
         ? existingBatches.map((b) => ({
             noBatch: b.noBatch || '',
@@ -196,8 +189,22 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
             boxAkhir: b.boxAkhir || '',
             qtyBox: b.qtyBox
           }))
-        : [{ noBatch: record.noBatch || '', boxAwal: record.boxAwal || '', boxAkhir: record.boxAkhir || '' }]
-    );
+        : [{ noBatch: record.noBatch || '', boxAwal: record.boxAwal || '', boxAkhir: record.boxAkhir || '' }];
+
+    const computedBoxSum = initialBatches.reduce((sum, b) => {
+      const c = calculateBatchBoxCount(b.boxAwal, b.boxAkhir);
+      return sum + (c?.isValid ? c.totalBox : 0);
+    }, 0);
+
+    const resolvedWh = resolvePalletWarehouseLocation(record, masterWarehouses);
+    setEditingRecord({
+      ...record,
+      qtyPallet: computedBoxSum > 0 ? computedBoxSum : record.qtyPallet,
+      statusQc: resolvePalletQcStatus(record),
+      lokasiGudang: record.lokasiGudang || resolvedWh,
+      gudangAsal: record.gudangAsal || record.operHistory?.[0]?.dariGudang || ''
+    });
+    setEditBatches(initialBatches);
     setEditOperHistory(
       (record.operHistory || []).map((op) => ({
         dariGudang: op.dariGudang || '',
@@ -2147,15 +2154,20 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
                             type="text"
                             required
                             value={eb.boxAwal}
-                            onChange={(e) =>
-                              setEditBatches((prev) =>
-                                prev.map((item, idx) =>
-                                  idx === bIdx
-                                    ? { ...item, boxAwal: e.target.value.toUpperCase() }
-                                    : item
-                                )
-                              )
-                            }
+                            onChange={(e) => {
+                              const nextVal = e.target.value.toUpperCase();
+                              const nextBatches = editBatches.map((item, idx) =>
+                                idx === bIdx ? { ...item, boxAwal: nextVal } : item
+                              );
+                              setEditBatches(nextBatches);
+                              const nextTotal = nextBatches.reduce((sum, b) => {
+                                const c = calculateBatchBoxCount(b.boxAwal, b.boxAkhir);
+                                return sum + (c?.isValid ? c.totalBox : 0);
+                              }, 0);
+                              if (nextTotal > 0 && editingRecord) {
+                                setEditingRecord({ ...editingRecord, qtyPallet: nextTotal });
+                              }
+                            }}
                             className="w-full font-mono bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-900 dark:text-slate-100"
                           />
                         </div>
@@ -2168,15 +2180,20 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
                             type="text"
                             required
                             value={eb.boxAkhir}
-                            onChange={(e) =>
-                              setEditBatches((prev) =>
-                                prev.map((item, idx) =>
-                                  idx === bIdx
-                                    ? { ...item, boxAkhir: e.target.value.toUpperCase() }
-                                    : item
-                                )
-                              )
-                            }
+                            onChange={(e) => {
+                              const nextVal = e.target.value.toUpperCase();
+                              const nextBatches = editBatches.map((item, idx) =>
+                                idx === bIdx ? { ...item, boxAkhir: nextVal } : item
+                              );
+                              setEditBatches(nextBatches);
+                              const nextTotal = nextBatches.reduce((sum, b) => {
+                                const c = calculateBatchBoxCount(b.boxAwal, b.boxAkhir);
+                                return sum + (c?.isValid ? c.totalBox : 0);
+                              }, 0);
+                              if (nextTotal > 0 && editingRecord) {
+                                setEditingRecord({ ...editingRecord, qtyPallet: nextTotal });
+                              }
+                            }}
                             className="w-full font-mono bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-900 dark:text-slate-100"
                           />
                         </div>
@@ -2185,9 +2202,17 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
                           {editBatches.length > 1 && (
                             <button
                               type="button"
-                              onClick={() =>
-                                setEditBatches((prev) => prev.filter((_, idx) => idx !== bIdx))
-                              }
+                              onClick={() => {
+                                const nextBatches = editBatches.filter((_, idx) => idx !== bIdx);
+                                setEditBatches(nextBatches);
+                                const nextTotal = nextBatches.reduce((sum, b) => {
+                                  const c = calculateBatchBoxCount(b.boxAwal, b.boxAkhir);
+                                  return sum + (c?.isValid ? c.totalBox : 0);
+                                }, 0);
+                                if (nextTotal > 0 && editingRecord) {
+                                  setEditingRecord({ ...editingRecord, qtyPallet: nextTotal });
+                                }
+                              }}
                               className="p-1.5 text-red-500 hover:bg-red-50 dark:hover:bg-red-950/40 rounded-lg cursor-pointer"
                               title={`Hapus Batch #${bIdx + 1}`}
                             >
@@ -2205,12 +2230,22 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
                     const c = calculateBatchBoxCount(b.boxAwal, b.boxAkhir);
                     return sum + (c?.isValid ? c.totalBox : 0);
                   }, 0);
-                  if (totalBoxSum > 0 && totalBoxSum !== Number(editingRecord.qtyPallet)) {
-                    return (
-                      <div className="flex items-center justify-between pt-1 text-[11px]">
-                        <span className="text-slate-600 dark:text-slate-400">
-                          Total hitungan rentang No. Box: <strong className="text-emerald-700 dark:text-emerald-300">{totalBoxSum} Box</strong>
-                        </span>
+                  if (totalBoxSum <= 0) return null;
+                  const isSynced = totalBoxSum === Number(editingRecord.qtyPallet);
+                  return (
+                    <div className="flex items-center justify-between pt-1 text-[11px]">
+                      <span className="text-slate-600 dark:text-slate-400">
+                        Total hitungan rentang No. Box:{' '}
+                        <strong className="text-emerald-700 dark:text-emerald-300">
+                          {totalBoxSum} Box
+                        </strong>
+                        {isSynced && (
+                          <span className="ml-1.5 text-emerald-600 dark:text-emerald-400 font-semibold">
+                            (Otomatis sinkron ke Qty)
+                          </span>
+                        )}
+                      </span>
+                      {!isSynced && (
                         <button
                           type="button"
                           onClick={() =>
@@ -2220,10 +2255,9 @@ export const PalletHistoryTable: React.FC<PalletHistoryTableProps> = ({
                         >
                           ← Terapkan Total ({totalBoxSum} Box) ke Qty
                         </button>
-                      </div>
-                    );
-                  }
-                  return null;
+                      )}
+                    </div>
+                  );
                 })()}
               </div>
 

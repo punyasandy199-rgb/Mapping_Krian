@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react';
+import kapalApiLogo from '../assets/kapal-api-logo.png';
 import {
   MasterWarehouse,
   WarehouseLocationGroup,
@@ -127,7 +128,7 @@ export const LocationPortalView: React.FC<LocationPortalViewProps> = ({
           {/* Zone 1: Brand Wordmark */}
           <div className="flex items-center gap-2.5 whitespace-nowrap shrink-0">
             <img
-              src="/assets/aistudio/image_73c65fac.png"
+              src={kapalApiLogo}
               alt="Kapal Api"
               className="h-10 w-auto object-contain bg-white shrink-0"
             />

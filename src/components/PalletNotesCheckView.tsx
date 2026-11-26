@@ -81,8 +81,7 @@ export const PalletNotesCheckView: React.FC<PalletNotesCheckViewProps> = ({
 
   const handleOpenEdit = (record: PalletRecord) => {
     const existingBatches = getPalletBatches(record);
-    setEditingRecord({ ...record });
-    setEditBatches(
+    const initialBatches: PalletBatchEntry[] =
       existingBatches.length > 0
         ? existingBatches.map((b) => ({
             noBatch: b.noBatch || '',
@@ -96,8 +95,16 @@ export const PalletNotesCheckView: React.FC<PalletNotesCheckViewProps> = ({
               boxAwal: record.boxAwal || '',
               boxAkhir: record.boxAkhir || ''
             }
-          ]
-    );
+          ];
+    const computedBoxSum = initialBatches.reduce((sum, b) => {
+      const c = calculateBatchBoxCount(b.boxAwal, b.boxAkhir);
+      return sum + (c?.isValid ? c.totalBox : 0);
+    }, 0);
+    setEditingRecord({
+      ...record,
+      qtyPallet: computedBoxSum > 0 ? computedBoxSum : record.qtyPallet
+    });
+    setEditBatches(initialBatches);
     setMarkResolvedOnSave(true);
     setEditError(null);
   };
@@ -626,13 +633,20 @@ export const PalletNotesCheckView: React.FC<PalletNotesCheckViewProps> = ({
                       <input
                         type="text"
                         value={eb.boxAwal}
-                        onChange={(e) =>
-                          setEditBatches((prev) =>
-                            prev.map((x, i) =>
-                              i === idx ? { ...x, boxAwal: e.target.value.toUpperCase() } : x
-                            )
-                          )
-                        }
+                        onChange={(e) => {
+                          const nextVal = e.target.value.toUpperCase();
+                          const nextBatches = editBatches.map((x, i) =>
+                            i === idx ? { ...x, boxAwal: nextVal } : x
+                          );
+                          setEditBatches(nextBatches);
+                          const nextTotal = nextBatches.reduce((sum, b) => {
+                            const c = calculateBatchBoxCount(b.boxAwal, b.boxAkhir);
+                            return sum + (c?.isValid ? c.totalBox : 0);
+                          }, 0);
+                          if (nextTotal > 0 && editingRecord) {
+                            setEditingRecord({ ...editingRecord, qtyPallet: nextTotal });
+                          }
+                        }}
                         placeholder="Box Awal"
                         className="w-full font-mono bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded px-2 py-1.5 text-slate-900 dark:text-white"
                       />
@@ -641,13 +655,20 @@ export const PalletNotesCheckView: React.FC<PalletNotesCheckViewProps> = ({
                       <input
                         type="text"
                         value={eb.boxAkhir}
-                        onChange={(e) =>
-                          setEditBatches((prev) =>
-                            prev.map((x, i) =>
-                              i === idx ? { ...x, boxAkhir: e.target.value.toUpperCase() } : x
-                            )
-                          )
-                        }
+                        onChange={(e) => {
+                          const nextVal = e.target.value.toUpperCase();
+                          const nextBatches = editBatches.map((x, i) =>
+                            i === idx ? { ...x, boxAkhir: nextVal } : x
+                          );
+                          setEditBatches(nextBatches);
+                          const nextTotal = nextBatches.reduce((sum, b) => {
+                            const c = calculateBatchBoxCount(b.boxAwal, b.boxAkhir);
+                            return sum + (c?.isValid ? c.totalBox : 0);
+                          }, 0);
+                          if (nextTotal > 0 && editingRecord) {
+                            setEditingRecord({ ...editingRecord, qtyPallet: nextTotal });
+                          }
+                        }}
                         placeholder="Box Akhir"
                         className="w-full font-mono bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded px-2 py-1.5 text-slate-900 dark:text-white"
                       />
@@ -656,10 +677,18 @@ export const PalletNotesCheckView: React.FC<PalletNotesCheckViewProps> = ({
                       {editBatches.length > 1 && (
                         <button
                           type="button"
-                          onClick={() =>
-                            setEditBatches((prev) => prev.filter((_, i) => i !== idx))
-                          }
-                          className="p-1 text-red-500 hover:bg-red-50 rounded"
+                          onClick={() => {
+                            const nextBatches = editBatches.filter((_, i) => i !== idx);
+                            setEditBatches(nextBatches);
+                            const nextTotal = nextBatches.reduce((sum, b) => {
+                              const c = calculateBatchBoxCount(b.boxAwal, b.boxAkhir);
+                              return sum + (c?.isValid ? c.totalBox : 0);
+                            }, 0);
+                            if (nextTotal > 0 && editingRecord) {
+                              setEditingRecord({ ...editingRecord, qtyPallet: nextTotal });
+                            }
+                          }}
+                          className="p-1 text-red-500 hover:bg-red-50 rounded cursor-pointer"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>

@@ -1,6 +1,18 @@
 import React, { useState, useMemo } from 'react';
-import { PalletRecord, MasterWarehouse, SuratJalanRecord } from '../types/warehouse';
-import { getPalletBatches } from '../utils/batchCalculator';
+import {
+  PalletRecord,
+  PalletBatchEntry,
+  PalletQcStatus,
+  MasterItem,
+  MasterWarehouse,
+  SuratJalanRecord,
+  COMMON_UNITS,
+  CANONICAL_WAREHOUSE_LOCATIONS,
+  resolvePalletWarehouseLocation,
+  resolvePalletQcStatus,
+  deriveAsalPacking
+} from '../types/warehouse';
+import { calculateBatchBoxCount, getPalletBatches } from '../utils/batchCalculator';
 import { exportPalletsToCsv } from '../utils/exporter';
 import {
   CalendarClock,
@@ -13,13 +25,23 @@ import {
   ArrowUpDown,
   PackageCheck,
   FileText,
-  Truck
+  Truck,
+  Pencil,
+  Plus,
+  Trash2,
+  Save,
+  X,
+  AlertCircle,
+  CheckCircle2
 } from 'lucide-react';
 
 interface PalletUpdateMonitorViewProps {
   records: PalletRecord[];
   suratJalanHistory?: SuratJalanRecord[];
   activeWarehouse?: MasterWarehouse | null;
+  masterItems?: MasterItem[];
+  masterWarehouses?: MasterWarehouse[];
+  onUpdateRecord?: (updated: PalletRecord) => Promise<void> | void;
   onOpenHistory?: () => void;
 }
 
@@ -90,7 +112,10 @@ function getEffectiveUpdateIso(record: PalletRecord): string | null {
 export const PalletUpdateMonitorView: React.FC<PalletUpdateMonitorViewProps> = ({
   records,
   suratJalanHistory = [],
-  activeWarehouse
+  activeWarehouse,
+  masterItems = [],
+  masterWarehouses = [],
+  onUpdateRecord
 }) => {
   const todayKey = useMemo(() => toLocalDateKey(new Date()), []);
   const yesterdayKey = useMemo(() => {
@@ -104,6 +129,176 @@ export const PalletUpdateMonitorView: React.FC<PalletUpdateMonitorViewProps> = (
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'IN' | 'OUT'>('ALL');
   const [searchTerm, setSearchTerm] = useState('');
   const [onlyCurrentWarehouse, setOnlyCurrentWarehouse] = useState(false);
+
+  // State modal Update Data Pallet langsung dari halaman Monitoring Update
+  const [editingRecord, setEditingRecord] = useState<PalletRecord | null>(null);
+  const [editBatches, setEditBatches] = useState<PalletBatchEntry[]>([]);
+  const [editError, setEditError] = useState<string | null>(null);
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  const handleOpenEdit = (record: PalletRecord) => {
+    const existingBatches = getPalletBatches(record);
+    const initialBatches: PalletBatchEntry[] =
+      existingBatches.length > 0
+        ? existingBatches.map((b) => ({
+            noBatch: b.noBatch || '',
+            boxAwal: b.boxAwal || '',
+            boxAkhir: b.boxAkhir || '',
+            qtyBox: b.qtyBox
+          }))
+        : [
+            {
+              noBatch: record.noBatch || '',
+              boxAwal: record.boxAwal || '',
+              boxAkhir: record.boxAkhir || ''
+            }
+          ];
+    const computedBoxSum = initialBatches.reduce((sum, b) => {
+      const c = calculateBatchBoxCount(b.boxAwal, b.boxAkhir);
+      return sum + (c?.isValid ? c.totalBox : 0);
+    }, 0);
+    const resolvedWh = resolvePalletWarehouseLocation(record, masterWarehouses);
+    setEditingRecord({
+      ...record,
+      qtyPallet: computedBoxSum > 0 ? computedBoxSum : record.qtyPallet,
+      statusQc: resolvePalletQcStatus(record),
+      lokasiGudang: record.lokasiGudang || resolvedWh
+    });
+    setEditBatches(initialBatches);
+    setEditError(null);
+  };
+
+  const handleSaveEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingRecord || !onUpdateRecord) return;
+    setEditError(null);
+
+    const noPalletClean = (editingRecord.nomorPallet || '').trim().toUpperCase();
+    const binClean = (editingRecord.lokasiBin || '').trim().toUpperCase();
+    const namaClean = (editingRecord.namaBarang || '').trim();
+    const kodeClean = (editingRecord.kodeItem || '').trim().toUpperCase();
+    const qtyNum = Number(editingRecord.qtyPallet);
+
+    if (!noPalletClean) {
+      setEditError('Nomor Pallet wajib diisi.');
+      return;
+    }
+    if (!binClean) {
+      setEditError('Lokasi Bin wajib diisi.');
+      return;
+    }
+    if (!namaClean) {
+      setEditError('Nama Barang wajib diisi.');
+      return;
+    }
+    if (isNaN(qtyNum) || qtyNum <= 0) {
+      setEditError('Qty / Pallet harus lebih dari 0.');
+      return;
+    }
+    if (editBatches.length === 0) {
+      setEditError('Minimal harus ada 1 Batch pada pallet ini.');
+      return;
+    }
+
+    const cleanedBatches: PalletBatchEntry[] = [];
+    for (let i = 0; i < editBatches.length; i++) {
+      const b = editBatches[i];
+      const nb = (b.noBatch || '').trim().toUpperCase();
+      const ba = (b.boxAwal || '').trim().toUpperCase();
+      const bk = (b.boxAkhir || '').trim().toUpperCase();
+      if (!nb) {
+        setEditError(`Batch #${i + 1}: No. Batch wajib diisi.`);
+        return;
+      }
+      if (!ba || !bk) {
+        setEditError(`Batch #${i + 1}: No. Box Awal & No. Box Akhir wajib diisi.`);
+        return;
+      }
+      const calc = calculateBatchBoxCount(ba, bk);
+      cleanedBatches.push({
+        noBatch: nb,
+        boxAwal: ba,
+        boxAkhir: bk,
+        ...(calc?.isValid ? { qtyBox: calc.totalBox } : {})
+      });
+    }
+
+    const combinedNoBatch = cleanedBatches.map((b) => b.noBatch).join(', ');
+    const firstBatch = cleanedBatches[0];
+    const originalRecord = records.find((r) => r.id === editingRecord.id);
+    const binChanged =
+      originalRecord && originalRecord.lokasiBin.toUpperCase() !== binClean;
+
+    const resolvedGudang =
+      (editingRecord.lokasiGudang || '').trim() ||
+      resolvePalletWarehouseLocation(
+        { lokasiBin: binClean, lokasiGudang: '' },
+        masterWarehouses
+      );
+
+    const changedFields: string[] = [];
+    if (originalRecord) {
+      if ((originalRecord.nomorPallet || '').toUpperCase() !== noPalletClean) changedFields.push('No. Pallet');
+      if (resolvePalletQcStatus(originalRecord) !== resolvePalletQcStatus(editingRecord)) changedFields.push('Status');
+      if ((originalRecord.lokasiGudang || '') !== resolvedGudang) changedFields.push('Gudang');
+      if ((originalRecord.lokasiBin || '').toUpperCase() !== binClean) changedFields.push('Bin');
+      if ((originalRecord.namaBarang || '') !== namaClean || (originalRecord.kodeItem || '').toUpperCase() !== kodeClean) {
+        changedFields.push('Barang');
+      }
+      if (Number(originalRecord.qtyPallet) !== qtyNum) changedFields.push('Qty');
+      if (
+        (originalRecord.noBatch || '').toUpperCase() !== combinedNoBatch.toUpperCase() ||
+        (originalRecord.boxAwal || '').toUpperCase() !== firstBatch.boxAwal ||
+        (originalRecord.boxAkhir || '').toUpperCase() !== firstBatch.boxAkhir
+      ) {
+        changedFields.push('Batch/Box');
+      }
+      if ((originalRecord.keterangan || '').trim() !== (editingRecord.keterangan?.trim() || '')) {
+        changedFields.push('Keterangan');
+      }
+    }
+
+    const updated: PalletRecord = {
+      ...editingRecord,
+      nomorPallet: noPalletClean,
+      statusQc: resolvePalletQcStatus(editingRecord),
+      lokasiBin: binClean,
+      lokasiGudang: resolvedGudang,
+      kodeItem: kodeClean,
+      namaBarang: namaClean,
+      qtyPallet: qtyNum,
+      unit: editingRecord.unit || 'Box',
+      noBatch: combinedNoBatch,
+      boxAwal: firstBatch.boxAwal,
+      boxAkhir: firstBatch.boxAkhir,
+      batchAwal: firstBatch.boxAwal,
+      batchAkhir: firstBatch.boxAkhir,
+      batches: cleanedBatches,
+      keterangan: editingRecord.keterangan?.trim() || '',
+      updatedAt: new Date().toISOString(),
+      lastUpdateAction:
+        changedFields.length > 0
+          ? `Update Monitoring (${changedFields.join(', ')})`
+          : 'Update Data Pallet',
+      ...(binChanged ? { binOrder: undefined } : {})
+    };
+
+    try {
+      setIsSavingEdit(true);
+      await onUpdateRecord(updated);
+      setEditingRecord(null);
+      setToastMessage(
+        `Data Pallet ${updated.nomorPallet} (Bin ${updated.lokasiBin}) berhasil diupdate!`
+      );
+      setTimeout(() => setToastMessage(null), 4000);
+    } catch (err) {
+      console.error('Gagal menyimpan update pallet:', err);
+      setEditError('Gagal menyimpan perubahan ke database. Silakan coba lagi.');
+    } finally {
+      setIsSavingEdit(false);
+    }
+  };
 
   // Filter opsional berdasarkan gudang aktif
   const scopedRecords = useMemo(() => {
@@ -261,6 +456,13 @@ export const PalletUpdateMonitorView: React.FC<PalletUpdateMonitorViewProps> = (
 
   return (
     <div className="space-y-6">
+      {toastMessage && (
+        <div className="p-3.5 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-300 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200 rounded-xl text-xs font-semibold flex items-center gap-2 shadow-xs">
+          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+          <span>{toastMessage}</span>
+        </div>
+      )}
+
       {/* Date Filter & Quick Picks Card */}
       <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-4 sm:p-5 shadow-xs space-y-4">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
@@ -532,6 +734,7 @@ export const PalletUpdateMonitorView: React.FC<PalletUpdateMonitorViewProps> = (
                   <th className="py-3 px-3 text-right">Qty Box</th>
                   <th className="py-3 px-3">Batch &amp; No. Box</th>
                   <th className="py-3 px-3">Keterangan</th>
+                  {onUpdateRecord && <th className="py-3 px-3 text-right">Aksi</th>}
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
@@ -636,6 +839,19 @@ export const PalletUpdateMonitorView: React.FC<PalletUpdateMonitorViewProps> = (
                           <span className="text-slate-400">-</span>
                         )}
                       </td>
+                      {onUpdateRecord && (
+                        <td className="py-3 px-3 text-right whitespace-nowrap">
+                          <button
+                            type="button"
+                            onClick={() => handleOpenEdit(item)}
+                            className="inline-flex items-center justify-center p-2 rounded-lg bg-blue-50 dark:bg-blue-950/60 hover:bg-blue-100 dark:hover:bg-blue-900 text-blue-600 dark:text-blue-400 border border-blue-200 dark:border-blue-800 transition-colors cursor-pointer"
+                            title={`Update data pallet ${item.nomorPallet}`}
+                            aria-label={`Update data pallet ${item.nomorPallet}`}
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                          </button>
+                        </td>
+                      )}
                     </tr>
                   );
                 })}
@@ -742,6 +958,456 @@ export const PalletUpdateMonitorView: React.FC<PalletUpdateMonitorViewProps> = (
                 })}
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Update Data Pallet dari Halaman Monitoring Update */}
+      {editingRecord && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-3 sm:p-4 overflow-y-auto">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl max-w-2xl w-full border border-slate-200 dark:border-slate-800 shadow-2xl p-5 sm:p-6 my-auto">
+            <div className="flex items-center justify-between pb-3 mb-4 border-b border-slate-200 dark:border-slate-800">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-lg bg-blue-100 dark:bg-blue-950 text-blue-600 dark:text-blue-400">
+                  <Pencil className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                    Update Data Pallet ({editingRecord.nomorPallet || editingRecord.barcodeNumber})
+                  </h3>
+                  <p className="text-[11px] text-slate-500">
+                    Perbarui jumlah box, batch, lokasi bin, atau catatan langsung dari Monitoring Update
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingRecord(null)}
+                className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveEdit} className="space-y-4 text-xs">
+              <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
+                <div className="sm:col-span-3">
+                  <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    No. Pallet *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={editingRecord.nomorPallet}
+                    onChange={(e) =>
+                      setEditingRecord({
+                        ...editingRecord,
+                        nomorPallet: e.target.value.toUpperCase()
+                      })
+                    }
+                    className="w-full font-mono font-bold bg-amber-50/70 dark:bg-slate-800 border border-amber-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-white"
+                  />
+                </div>
+
+                <div className="sm:col-span-3">
+                  <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    Status Pallet *
+                  </label>
+                  <select
+                    value={resolvePalletQcStatus(editingRecord)}
+                    onChange={(e) =>
+                      setEditingRecord({
+                        ...editingRecord,
+                        statusQc: e.target.value as PalletQcStatus
+                      })
+                    }
+                    className="w-full font-bold bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-2.5 py-2 text-slate-900 dark:text-slate-100"
+                  >
+                    <option value="OK">OK</option>
+                    <option value="HOLD">HOLD</option>
+                    <option value="PROBLEM">PROBLEM</option>
+                    <option value="IN">IN</option>
+                    <option value="OUT">OUT</option>
+                  </select>
+                </div>
+
+                <div className="sm:col-span-3">
+                  <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    Lokasi Bin *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={editingRecord.lokasiBin}
+                    onChange={(e) =>
+                      setEditingRecord({
+                        ...editingRecord,
+                        lokasiBin: e.target.value.toUpperCase()
+                      })
+                    }
+                    className="w-full font-mono font-bold text-blue-600 dark:text-blue-400 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2"
+                  />
+                </div>
+
+                <div className="sm:col-span-3">
+                  <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    Lokasi Gudang *
+                  </label>
+                  <select
+                    value={editingRecord.lokasiGudang || 'Gd Krian'}
+                    onChange={(e) =>
+                      setEditingRecord({
+                        ...editingRecord,
+                        lokasiGudang: e.target.value
+                      })
+                    }
+                    className="w-full font-bold bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-2.5 py-2 text-slate-900 dark:text-slate-100"
+                  >
+                    {CANONICAL_WAREHOUSE_LOCATIONS.map((loc) => (
+                      <option key={loc} value={loc}>
+                        {loc}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {masterItems.length > 0 && (
+                  <div className="sm:col-span-12">
+                    <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      Pilih dari Master Barang (Opsional)
+                    </label>
+                    <select
+                      value={
+                        masterItems.find(
+                          (m) =>
+                            m.kodeItem === editingRecord.kodeItem &&
+                            m.namaBarang === editingRecord.namaBarang
+                        )?.id || ''
+                      }
+                      onChange={(e) => {
+                        const found = masterItems.find((m) => m.id === e.target.value);
+                        if (found) {
+                          setEditingRecord({
+                            ...editingRecord,
+                            kodeItem: found.kodeItem,
+                            namaBarang: found.namaBarang,
+                            unit: found.satuan || editingRecord.unit || 'Box'
+                          });
+                        }
+                      }}
+                      className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-100"
+                    >
+                      <option value="">-- Pertahankan / Isi Manual di Bawah --</option>
+                      {masterItems.map((m) => (
+                        <option key={m.id} value={m.id}>
+                          [{m.kodeItem}] {m.namaBarang}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                <div className="sm:col-span-4">
+                  <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    Kode Item
+                  </label>
+                  <input
+                    type="text"
+                    value={editingRecord.kodeItem}
+                    onChange={(e) =>
+                      setEditingRecord({
+                        ...editingRecord,
+                        kodeItem: e.target.value.toUpperCase()
+                      })
+                    }
+                    className="w-full font-mono font-bold text-blue-700 dark:text-blue-300 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2"
+                  />
+                </div>
+
+                <div className="sm:col-span-5">
+                  <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    Nama Barang *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={editingRecord.namaBarang}
+                    onChange={(e) =>
+                      setEditingRecord({
+                        ...editingRecord,
+                        namaBarang: e.target.value
+                      })
+                    }
+                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-100 font-medium"
+                  />
+                </div>
+
+                <div className="sm:col-span-3">
+                  <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    Qty / Pallet *
+                  </label>
+                  <div className="flex gap-1.5">
+                    <input
+                      type="number"
+                      min={1}
+                      required
+                      value={editingRecord.qtyPallet}
+                      onChange={(e) =>
+                        setEditingRecord({
+                          ...editingRecord,
+                          qtyPallet: Number(e.target.value) || 0
+                        })
+                      }
+                      className="w-full font-mono font-bold bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-2.5 py-2 text-slate-900 dark:text-slate-100"
+                    />
+                    <select
+                      value={editingRecord.unit || 'Box'}
+                      onChange={(e) =>
+                        setEditingRecord({
+                          ...editingRecord,
+                          unit: e.target.value
+                        })
+                      }
+                      className="bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-2 py-2 text-slate-800 dark:text-slate-200"
+                    >
+                      {COMMON_UNITS.map((u) => (
+                        <option key={u} value={u}>
+                          {u}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              {/* Batches & Box Ranges */}
+              <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 space-y-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <span className="font-bold text-slate-800 dark:text-slate-200">
+                      Daftar Batch &amp; Nomor Box ({editBatches.length} Batch)
+                    </span>
+                    <p className="text-[11px] text-slate-500">
+                      Qty / Pallet otomatis tersinkron dengan total hitungan rentang No. Box
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setEditBatches((prev) => [
+                        ...prev,
+                        { noBatch: '', boxAwal: '', boxAkhir: '' }
+                      ])
+                    }
+                    className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-blue-50 dark:bg-blue-950/60 hover:bg-blue-100 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 font-bold text-[11px] cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Tambah Batch</span>
+                  </button>
+                </div>
+
+                <div className="space-y-2">
+                  {editBatches.map((eb, bIdx) => {
+                    const bCalc = calculateBatchBoxCount(eb.boxAwal, eb.boxAkhir);
+                    return (
+                      <div
+                        key={bIdx}
+                        className="p-2.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 grid grid-cols-1 sm:grid-cols-12 gap-2 items-end"
+                      >
+                        <div className="sm:col-span-2 flex items-center gap-1.5 self-center">
+                          <span className="px-2 py-0.5 rounded bg-slate-800 dark:bg-blue-600 text-white font-mono font-bold text-[11px]">
+                            Batch #{bIdx + 1}
+                          </span>
+                          {bCalc?.isValid && (
+                            <span className="text-[10px] font-mono font-bold text-emerald-600">
+                              ({bCalc.totalBox} Box)
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="sm:col-span-3">
+                          <div className="flex items-center justify-between gap-1 mb-0.5">
+                            <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400">
+                              No. Batch *
+                            </label>
+                            {deriveAsalPacking(eb.noBatch) !== '-' && (
+                              <span className="text-[10px] font-bold text-indigo-700 dark:text-indigo-300">
+                                {deriveAsalPacking(eb.noBatch)}
+                              </span>
+                            )}
+                          </div>
+                          <input
+                            type="text"
+                            required
+                            value={eb.noBatch}
+                            onChange={(e) =>
+                              setEditBatches((prev) =>
+                                prev.map((item, idx) =>
+                                  idx === bIdx
+                                    ? { ...item, noBatch: e.target.value.toUpperCase() }
+                                    : item
+                                )
+                              )
+                            }
+                            className="w-full font-mono bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-900 dark:text-slate-100"
+                          />
+                        </div>
+
+                        <div className="sm:col-span-3">
+                          <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-0.5">
+                            No. Box Awal *
+                          </label>
+                          <input
+                            type="text"
+                            required
+                            value={eb.boxAwal}
+                            onChange={(e) => {
+                              const nextVal = e.target.value.toUpperCase();
+                              const nextBatches = editBatches.map((item, idx) =>
+                                idx === bIdx ? { ...item, boxAwal: nextVal } : item
+                              );
+                              setEditBatches(nextBatches);
+                              const nextTotal = nextBatches.reduce((sum, b) => {
+                                const c = calculateBatchBoxCount(b.boxAwal, b.boxAkhir);
+                                return sum + (c?.isValid ? c.totalBox : 0);
+                              }, 0);
+                              if (nextTotal > 0) {
+                                setEditingRecord({ ...editingRecord, qtyPallet: nextTotal });
+                              }
+                            }}
+                            className="w-full font-mono bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-900 dark:text-slate-100"
+                          />
+                        </div>
+
+                        <div className="sm:col-span-3">
+                          <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-0.5">
+                            No. Box Akhir *
+                          </label>
+                          <input
+                            type="text"
+                            required
+                            value={eb.boxAkhir}
+                            onChange={(e) => {
+                              const nextVal = e.target.value.toUpperCase();
+                              const nextBatches = editBatches.map((item, idx) =>
+                                idx === bIdx ? { ...item, boxAkhir: nextVal } : item
+                              );
+                              setEditBatches(nextBatches);
+                              const nextTotal = nextBatches.reduce((sum, b) => {
+                                const c = calculateBatchBoxCount(b.boxAwal, b.boxAkhir);
+                                return sum + (c?.isValid ? c.totalBox : 0);
+                              }, 0);
+                              if (nextTotal > 0) {
+                                setEditingRecord({ ...editingRecord, qtyPallet: nextTotal });
+                              }
+                            }}
+                            className="w-full font-mono bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-900 dark:text-slate-100"
+                          />
+                        </div>
+
+                        <div className="sm:col-span-1 flex justify-end">
+                          {editBatches.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const nextBatches = editBatches.filter((_, idx) => idx !== bIdx);
+                                setEditBatches(nextBatches);
+                                const nextTotal = nextBatches.reduce((sum, b) => {
+                                  const c = calculateBatchBoxCount(b.boxAwal, b.boxAkhir);
+                                  return sum + (c?.isValid ? c.totalBox : 0);
+                                }, 0);
+                                if (nextTotal > 0) {
+                                  setEditingRecord({ ...editingRecord, qtyPallet: nextTotal });
+                                }
+                              }}
+                              className="p-1.5 text-red-500 hover:bg-red-50 dark:hover:bg-red-950/40 rounded-lg cursor-pointer"
+                              title={`Hapus Batch #${bIdx + 1}`}
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {(() => {
+                  const totalBoxSum = editBatches.reduce((sum, b) => {
+                    const c = calculateBatchBoxCount(b.boxAwal, b.boxAkhir);
+                    return sum + (c?.isValid ? c.totalBox : 0);
+                  }, 0);
+                  if (totalBoxSum <= 0) return null;
+                  const isSynced = totalBoxSum === Number(editingRecord.qtyPallet);
+                  return (
+                    <div className="flex items-center justify-between pt-1 text-[11px]">
+                      <span className="text-slate-600 dark:text-slate-400">
+                        Total hitungan rentang No. Box:{' '}
+                        <strong className="text-emerald-700 dark:text-emerald-300">
+                          {totalBoxSum} Box
+                        </strong>
+                        {isSynced && (
+                          <span className="ml-1.5 text-emerald-600 dark:text-emerald-400 font-semibold">
+                            (Otomatis sinkron ke Qty)
+                          </span>
+                        )}
+                      </span>
+                      {!isSynced && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setEditingRecord({ ...editingRecord, qtyPallet: totalBoxSum })
+                          }
+                          className="px-2.5 py-1 rounded bg-blue-50 dark:bg-blue-950 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 font-bold cursor-pointer"
+                        >
+                          ← Terapkan Total ({totalBoxSum} Box) ke Qty
+                        </button>
+                      )}
+                    </div>
+                  );
+                })()}
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  Keterangan / Catatan
+                </label>
+                <input
+                  type="text"
+                  value={editingRecord.keterangan || ''}
+                  onChange={(e) =>
+                    setEditingRecord({ ...editingRecord, keterangan: e.target.value })
+                  }
+                  placeholder="Catatan tambahan (opsional)..."
+                  className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-100"
+                />
+              </div>
+
+              {editError && (
+                <div className="flex items-center gap-2 p-2.5 rounded-lg bg-red-50 text-red-700 border border-red-200 font-semibold">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{editError}</span>
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-200 dark:border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setEditingRecord(null)}
+                  className="px-4 py-2 rounded-lg text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 font-semibold cursor-pointer"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingEdit}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-bold shadow-xs disabled:opacity-50 cursor-pointer"
+                >
+                  <Save className="w-4 h-4" />
+                  <span>{isSavingEdit ? 'Menyimpan...' : 'Simpan Update'}</span>
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
