@@ -32,7 +32,10 @@ import {
   Save,
   X,
   AlertCircle,
-  CheckCircle2
+  AlertTriangle,
+  CheckCircle2,
+  Copy,
+  CheckSquare
 } from 'lucide-react';
 
 interface PalletUpdateMonitorViewProps {
@@ -109,6 +112,17 @@ function getEffectiveUpdateIso(record: PalletRecord): string | null {
   return null;
 }
 
+interface DuplicatePeerInfo {
+  id: string;
+  lokasiBin: string;
+  noBatch: string;
+  qtyPallet: number;
+  unit: string;
+  status: 'IN' | 'OUT';
+  dateLabel: string;
+  isActiveConflict: boolean;
+}
+
 export const PalletUpdateMonitorView: React.FC<PalletUpdateMonitorViewProps> = ({
   records,
   suratJalanHistory = [],
@@ -125,7 +139,9 @@ export const PalletUpdateMonitorView: React.FC<PalletUpdateMonitorViewProps> = (
   }, []);
 
   const [selectedDate, setSelectedDate] = useState<string>(todayKey);
-  const [activityMode, setActivityMode] = useState<'updated' | 'created' | 'all'>('updated');
+  const [activityMode, setActivityMode] = useState<
+    'unchecked' | 'checked' | 'updated' | 'created' | 'all'
+  >('unchecked');
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'IN' | 'OUT'>('ALL');
   const [searchTerm, setSearchTerm] = useState('');
   const [onlyCurrentWarehouse, setOnlyCurrentWarehouse] = useState(false);
@@ -133,6 +149,7 @@ export const PalletUpdateMonitorView: React.FC<PalletUpdateMonitorViewProps> = (
   // State modal Update Data Pallet langsung dari halaman Monitoring Update
   const [editingRecord, setEditingRecord] = useState<PalletRecord | null>(null);
   const [editBatches, setEditBatches] = useState<PalletBatchEntry[]>([]);
+  const [markCheckedOnSave, setMarkCheckedOnSave] = useState<boolean>(true);
   const [editError, setEditError] = useState<string | null>(null);
   const [isSavingEdit, setIsSavingEdit] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -166,6 +183,7 @@ export const PalletUpdateMonitorView: React.FC<PalletUpdateMonitorViewProps> = (
       lokasiGudang: record.lokasiGudang || resolvedWh
     });
     setEditBatches(initialBatches);
+    setMarkCheckedOnSave(true);
     setEditError(null);
   };
 
@@ -259,6 +277,7 @@ export const PalletUpdateMonitorView: React.FC<PalletUpdateMonitorViewProps> = (
       }
     }
 
+    const nowIso = new Date().toISOString();
     const updated: PalletRecord = {
       ...editingRecord,
       nomorPallet: noPalletClean,
@@ -276,11 +295,15 @@ export const PalletUpdateMonitorView: React.FC<PalletUpdateMonitorViewProps> = (
       batchAkhir: firstBatch.boxAkhir,
       batches: cleanedBatches,
       keterangan: editingRecord.keterangan?.trim() || '',
-      updatedAt: new Date().toISOString(),
+      updatedAt: nowIso,
+      monitorChecked: markCheckedOnSave,
+      monitorCheckedAt: markCheckedOnSave ? nowIso : undefined,
       lastUpdateAction:
         changedFields.length > 0
           ? `Update Monitoring (${changedFields.join(', ')})`
-          : 'Update Data Pallet',
+          : markCheckedOnSave
+          ? 'Cek Monitoring (Sudah Dicek)'
+          : 'Tandai Belum Dicek',
       ...(binChanged ? { binOrder: undefined } : {})
     };
 
@@ -289,7 +312,9 @@ export const PalletUpdateMonitorView: React.FC<PalletUpdateMonitorViewProps> = (
       await onUpdateRecord(updated);
       setEditingRecord(null);
       setToastMessage(
-        `Data Pallet ${updated.nomorPallet} (Bin ${updated.lokasiBin}) berhasil diupdate!`
+        markCheckedOnSave
+          ? `Data Pallet ${updated.nomorPallet} (Bin ${updated.lokasiBin}) diupdate & ditandai Sudah Dicek!`
+          : `Data Pallet ${updated.nomorPallet} (Bin ${updated.lokasiBin}) disimpan & tetap di daftar Belum Dicek.`
       );
       setTimeout(() => setToastMessage(null), 4000);
     } catch (err) {
@@ -311,31 +336,97 @@ export const PalletUpdateMonitorView: React.FC<PalletUpdateMonitorViewProps> = (
     });
   }, [records, onlyCurrentWarehouse, activeWarehouse]);
 
-  // Hitung tanggal-tanggal terbaru yang memiliki update pallet atau surat jalan agar cepat dipilih petugas
+  // Identifikasi No. Pallet yang terinput double di seluruh records (lintas bin, batch, & tanggal)
+  const duplicateInfoMap = useMemo(() => {
+    const byNoPallet = new Map<string, PalletRecord[]>();
+    records.forEach((r) => {
+      const key = (r.nomorPallet || '').trim().toUpperCase();
+      if (!key || key === '-') return;
+      const list = byNoPallet.get(key) || [];
+      list.push(r);
+      byNoPallet.set(key, list);
+    });
+
+    const result = new Map<
+      string,
+      { activePeers: DuplicatePeerInfo[]; historicalOutPeers: DuplicatePeerInfo[] }
+    >();
+
+    byNoPallet.forEach((group) => {
+      if (group.length < 2) return;
+      group.forEach((item) => {
+        const itemDate = toLocalDateKey(item.submittedAt);
+        const activePeers: DuplicatePeerInfo[] = [];
+        const historicalOutPeers: DuplicatePeerInfo[] = [];
+
+        group.forEach((peer) => {
+          if (peer.id === item.id) return;
+          const peerDate = toLocalDateKey(peer.submittedAt);
+          const peerStatus: 'IN' | 'OUT' = peer.status === 'OUT' ? 'OUT' : 'IN';
+          const itemStatus: 'IN' | 'OUT' = item.status === 'OUT' ? 'OUT' : 'IN';
+          const isActiveConflict =
+            (itemStatus !== 'OUT' && peerStatus !== 'OUT') ||
+            (itemStatus === 'OUT' && peerStatus !== 'OUT') ||
+            (itemDate !== '' && itemDate === peerDate);
+
+          const peerInfo: DuplicatePeerInfo = {
+            id: peer.id,
+            lokasiBin: peer.lokasiBin || '-',
+            noBatch: peer.noBatch || '-',
+            qtyPallet: Number(peer.qtyPallet) || 0,
+            unit: peer.unit || 'Box',
+            status: peerStatus,
+            dateLabel: peerDate ? formatShortDate(peerDate) : '-',
+            isActiveConflict
+          };
+
+          if (isActiveConflict) {
+            activePeers.push(peerInfo);
+          } else {
+            historicalOutPeers.push(peerInfo);
+          }
+        });
+
+        if (activePeers.length > 0 || historicalOutPeers.length > 0) {
+          result.set(item.id, { activePeers, historicalOutPeers });
+        }
+      });
+    });
+
+    return result;
+  }, [records]);
+
+  // Hitung tanggal-tanggal terbaru yang memiliki input baru, update pallet, atau surat jalan agar cepat dipilih petugas
   const recentUpdateDates = useMemo(() => {
-    const counts = new Map<string, number>();
+    const counts = new Map<string, Set<string>>();
+    const addKey = (dateKey: string, uniqueId: string) => {
+      if (!dateKey) return;
+      const set = counts.get(dateKey) || new Set<string>();
+      set.add(uniqueId);
+      counts.set(dateKey, set);
+    };
     scopedRecords.forEach((r) => {
       const updIso = getEffectiveUpdateIso(r);
-      if (!updIso) return;
-      const key = toLocalDateKey(updIso);
-      if (key) {
-        counts.set(key, (counts.get(key) || 0) + 1);
+      if (updIso) {
+        addKey(toLocalDateKey(updIso), `p_${r.id}`);
+      }
+      if (r.submittedAt) {
+        addKey(toLocalDateKey(r.submittedAt), `p_${r.id}`);
       }
     });
     suratJalanHistory.forEach((sj) => {
       const updIso = sj.updatedAt || sj.createdAt;
-      if (!updIso) return;
-      const key = toLocalDateKey(updIso);
-      if (key) {
-        counts.set(key, (counts.get(key) || 0) + 1);
+      if (updIso) {
+        addKey(toLocalDateKey(updIso), `sj_${sj.id}`);
       }
     });
     return Array.from(counts.entries())
+      .map(([dateKey, set]) => [dateKey, set.size] as [string, number])
       .sort((a, b) => b[0].localeCompare(a[0]))
       .slice(0, 6);
   }, [scopedRecords, suratJalanHistory]);
 
-  // Records yang diupdate vs diinput pada tanggal terpilih
+  // Records yang diupdate, diinput baru, belum dicek, vs sudah dicek pada tanggal terpilih
   const datePartition = useMemo(() => {
     const updatedOnDate: PalletRecord[] = [];
     const createdOnDate: PalletRecord[] = [];
@@ -364,7 +455,16 @@ export const PalletUpdateMonitorView: React.FC<PalletUpdateMonitorViewProps> = (
       }
     });
 
-    return { updatedOnDate, createdOnDate, allOnDate };
+    const uncheckedOnDate = createdOnDate.filter((r) => !r.monitorChecked);
+    const checkedOnDate = allOnDate.filter((r) => Boolean(r.monitorChecked));
+
+    return {
+      updatedOnDate,
+      createdOnDate,
+      allOnDate,
+      uncheckedOnDate,
+      checkedOnDate
+    };
   }, [scopedRecords, selectedDate]);
 
   // Surat Jalan yang dibuat / diupdate pada tanggal terpilih
@@ -395,16 +495,17 @@ export const PalletUpdateMonitorView: React.FC<PalletUpdateMonitorViewProps> = (
       });
   }, [suratJalanHistory, selectedDate, searchTerm]);
 
-  const modeRecords = useMemo(() => {
-    const base =
-      activityMode === 'updated'
-        ? datePartition.updatedOnDate
-        : activityMode === 'created'
-        ? datePartition.createdOnDate
-        : datePartition.allOnDate;
+  const baseByMode = useMemo(() => {
+    if (activityMode === 'unchecked') return datePartition.uncheckedOnDate;
+    if (activityMode === 'checked') return datePartition.checkedOnDate;
+    if (activityMode === 'updated') return datePartition.updatedOnDate;
+    if (activityMode === 'created') return datePartition.createdOnDate;
+    return datePartition.allOnDate;
+  }, [datePartition, activityMode]);
 
+  const modeRecords = useMemo(() => {
     const q = searchTerm.toLowerCase().trim();
-    return base
+    return baseByMode
       .filter((item) => {
         const st = item.status === 'OUT' ? 'OUT' : 'IN';
         if (statusFilter !== 'ALL' && st !== statusFilter) return false;
@@ -425,18 +526,18 @@ export const PalletUpdateMonitorView: React.FC<PalletUpdateMonitorViewProps> = (
         const timeB = new Date(getEffectiveUpdateIso(b) || b.submittedAt).getTime();
         return timeB - timeA;
       });
-  }, [datePartition, activityMode, statusFilter, searchTerm]);
+  }, [baseByMode, statusFilter, searchTerm]);
 
   // Statistik utama berdasar tanggal terpilih
   const kpiStats = useMemo(() => {
+    const allList = datePartition.allOnDate;
     const updatedList = datePartition.updatedOnDate;
-    const totalBoxUpdated = updatedList.reduce(
-      (sum, r) => sum + (Number(r.qtyPallet) || 0),
-      0
-    );
-    const affectedBins = new Set(
-      updatedList.map((r) => (r.lokasiBin || '').toUpperCase()).filter(Boolean)
-    ).size;
+    const qtyUnder15Count = allList.filter((r) => Number(r.qtyPallet) < 15).length;
+    const qtyOver15Count = allList.filter((r) => Number(r.qtyPallet) > 15).length;
+    const nonStandardQtyCount = qtyUnder15Count + qtyOver15Count;
+    const duplicateCount = allList.filter(
+      (r) => (duplicateInfoMap.get(r.id)?.activePeers.length || 0) > 0
+    ).length;
 
     const statusChangeCount = updatedList.filter((r) => {
       const act = (r.lastUpdateAction || '').toLowerCase();
@@ -445,14 +546,52 @@ export const PalletUpdateMonitorView: React.FC<PalletUpdateMonitorViewProps> = (
     const editCount = updatedList.length - statusChangeCount;
 
     return {
+      uncheckedCount: datePartition.uncheckedOnDate.length,
+      checkedCount: datePartition.checkedOnDate.length,
       updatedCount: updatedList.length,
       createdCount: datePartition.createdOnDate.length,
-      totalBoxUpdated,
-      affectedBins,
+      nonStandardQtyCount,
+      qtyUnder15Count,
+      qtyOver15Count,
+      duplicateCount,
       editCount,
       statusChangeCount
     };
-  }, [datePartition]);
+  }, [datePartition, duplicateInfoMap]);
+
+  // Deteksi live apakah nomorPallet di modal edit duplikat dengan pallet lain
+  const editingDuplicatePeers = useMemo(() => {
+    if (!editingRecord) return [];
+    const targetNo = (editingRecord.nomorPallet || '').trim().toUpperCase();
+    if (!targetNo || targetNo === '-') return [];
+    const currentDate = toLocalDateKey(editingRecord.submittedAt);
+    const currentStatus: 'IN' | 'OUT' = editingRecord.status === 'OUT' ? 'OUT' : 'IN';
+
+    return records
+      .filter(
+        (r) =>
+          r.id !== editingRecord.id &&
+          (r.nomorPallet || '').trim().toUpperCase() === targetNo
+      )
+      .map((peer) => {
+        const peerDate = toLocalDateKey(peer.submittedAt);
+        const peerStatus: 'IN' | 'OUT' = peer.status === 'OUT' ? 'OUT' : 'IN';
+        const isActiveConflict =
+          (currentStatus !== 'OUT' && peerStatus !== 'OUT') ||
+          (currentStatus === 'OUT' && peerStatus !== 'OUT') ||
+          (currentDate !== '' && currentDate === peerDate);
+        return {
+          id: peer.id,
+          lokasiBin: peer.lokasiBin || '-',
+          noBatch: peer.noBatch || '-',
+          qtyPallet: Number(peer.qtyPallet) || 0,
+          unit: peer.unit || 'Box',
+          status: peerStatus,
+          dateLabel: peerDate ? formatShortDate(peerDate) : '-',
+          isActiveConflict
+        };
+      });
+  }, [editingRecord, records]);
 
   return (
     <div className="space-y-6">
@@ -556,47 +695,116 @@ export const PalletUpdateMonitorView: React.FC<PalletUpdateMonitorViewProps> = (
 
       {/* 4-Column KPI Strip */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-white dark:bg-slate-900 rounded-xl border border-blue-300 dark:border-blue-800/70 p-4 shadow-xs">
-          <div className="text-[11px] font-bold uppercase text-blue-700 dark:text-blue-400 flex items-center gap-1.5">
-            <RefreshCw className="w-3.5 h-3.5" />
-            <span>Pallet Diupdate ({formatShortDate(selectedDate)})</span>
+        <div
+          className={`bg-white dark:bg-slate-900 rounded-xl border p-4 shadow-xs ${
+            kpiStats.uncheckedCount > 0
+              ? 'border-amber-300 dark:border-amber-800/70'
+              : 'border-emerald-300 dark:border-emerald-800/70'
+          }`}
+        >
+          <div
+            className={`text-[11px] font-bold uppercase flex items-center gap-1.5 ${
+              kpiStats.uncheckedCount > 0
+                ? 'text-amber-700 dark:text-amber-400'
+                : 'text-emerald-700 dark:text-emerald-400'
+            }`}
+          >
+            <CheckSquare className="w-3.5 h-3.5" />
+            <span>Belum Dicek ({formatShortDate(selectedDate)})</span>
           </div>
           <div className="text-2xl font-black font-mono tabular-nums text-slate-900 dark:text-white mt-1">
-            {kpiStats.updatedCount}{' '}
+            {kpiStats.uncheckedCount}{' '}
             <span className="text-xs font-normal text-slate-500">Pallet</span>
           </div>
-        </div>
-
-        <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-4 shadow-xs">
-          <div className="text-[11px] font-bold uppercase text-slate-500">
-            Total Box Terupdate
-          </div>
-          <div className="text-2xl font-black font-mono tabular-nums text-emerald-700 dark:text-emerald-400 mt-1">
-            {kpiStats.totalBoxUpdated.toLocaleString('id-ID')}{' '}
-            <span className="text-xs font-normal text-slate-500">Box</span>
+          <div className="text-[11px] text-slate-500 mt-0.5">
+            Sudah dicek:{' '}
+            <strong className="text-emerald-600 dark:text-emerald-400">
+              {kpiStats.checkedCount}
+            </strong>
           </div>
         </div>
 
-        <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-4 shadow-xs">
-          <div className="text-[11px] font-bold uppercase text-slate-500">
-            Bin Terdampak Update
+        <div
+          className={`bg-white dark:bg-slate-900 rounded-xl border p-4 shadow-xs ${
+            kpiStats.nonStandardQtyCount > 0
+              ? 'border-red-300 dark:border-red-800/80 bg-red-50/30 dark:bg-red-950/20'
+              : 'border-slate-200 dark:border-slate-800'
+          }`}
+        >
+          <div
+            className={`text-[11px] font-bold uppercase flex items-center gap-1.5 ${
+              kpiStats.nonStandardQtyCount > 0
+                ? 'text-red-700 dark:text-red-400'
+                : 'text-slate-500'
+            }`}
+          >
+            <AlertTriangle className="w-3.5 h-3.5" />
+            <span>Qty Box ≠ 15</span>
           </div>
-          <div className="text-2xl font-black font-mono tabular-nums text-slate-900 dark:text-white mt-1">
-            {kpiStats.affectedBins}{' '}
-            <span className="text-xs font-normal text-slate-500">Bin</span>
+          <div
+            className={`text-2xl font-black font-mono tabular-nums mt-1 ${
+              kpiStats.nonStandardQtyCount > 0
+                ? 'text-red-600 dark:text-red-400'
+                : 'text-slate-900 dark:text-white'
+            }`}
+          >
+            {kpiStats.nonStandardQtyCount}{' '}
+            <span className="text-xs font-normal text-slate-500">Pallet</span>
+          </div>
+          <div className="text-[11px] text-slate-500 mt-0.5">
+            &lt; 15: <strong>{kpiStats.qtyUnder15Count}</strong> · &gt; 15:{' '}
+            <strong>{kpiStats.qtyOver15Count}</strong>
+          </div>
+        </div>
+
+        <div
+          className={`bg-white dark:bg-slate-900 rounded-xl border p-4 shadow-xs ${
+            kpiStats.duplicateCount > 0
+              ? 'border-red-300 dark:border-red-800/80 bg-red-50/30 dark:bg-red-950/20'
+              : 'border-slate-200 dark:border-slate-800'
+          }`}
+        >
+          <div
+            className={`text-[11px] font-bold uppercase flex items-center gap-1.5 ${
+              kpiStats.duplicateCount > 0
+                ? 'text-red-700 dark:text-red-400'
+                : 'text-slate-500'
+            }`}
+          >
+            <Copy className="w-3.5 h-3.5" />
+            <span>No. Pallet Double</span>
+          </div>
+          <div
+            className={`text-2xl font-black font-mono tabular-nums mt-1 ${
+              kpiStats.duplicateCount > 0
+                ? 'text-red-600 dark:text-red-400'
+                : 'text-slate-900 dark:text-white'
+            }`}
+          >
+            {kpiStats.duplicateCount}{' '}
+            <span className="text-xs font-normal text-slate-500">Pallet</span>
+          </div>
+          <div className="text-[11px] text-slate-500 mt-0.5">
+            {kpiStats.duplicateCount > 0
+              ? 'Perlu cek bin & batch ganda'
+              : 'Tidak ada nomor ganda'}
           </div>
         </div>
 
         <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-4 shadow-xs">
-          <div className="text-[11px] font-bold uppercase text-slate-500">
-            Input Baru / Surat Jalan
+          <div className="text-[11px] font-bold uppercase text-slate-500 flex items-center gap-1.5">
+            <RefreshCw className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
+            <span>Input Baru / Update / SJ</span>
           </div>
           <div className="text-2xl font-black font-mono tabular-nums text-slate-700 dark:text-slate-300 mt-1">
             {kpiStats.createdCount}{' '}
-            <span className="text-xs font-normal text-slate-500">Pallet</span>
+            <span className="text-xs font-normal text-slate-500">Baru</span>
             <span className="text-xs font-normal text-slate-400 mx-1.5">·</span>
-            <span className="text-blue-600 dark:text-blue-400">{sjOnSelectedDate.length}</span>{' '}
-            <span className="text-xs font-normal text-slate-500">SJ</span>
+            <span className="text-blue-600 dark:text-blue-400">{kpiStats.updatedCount}</span>{' '}
+            <span className="text-xs font-normal text-slate-500">Upd</span>
+          </div>
+          <div className="text-[11px] text-slate-500 mt-0.5">
+            Surat Jalan: <strong className="text-blue-600 dark:text-blue-400">{sjOnSelectedDate.length}</strong>
           </div>
         </div>
       </div>
@@ -604,60 +812,87 @@ export const PalletUpdateMonitorView: React.FC<PalletUpdateMonitorViewProps> = (
       {/* Main Monitoring Table Card: Pallet */}
       <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">
         {/* Toolbar */}
-        <div className="p-4 sm:p-5 border-b border-slate-200 dark:border-slate-800 flex flex-col md:flex-row md:items-center justify-between gap-3">
-          <div>
-            <div className="text-sm font-bold text-slate-900 dark:text-white">
-              {formatDateReadable(selectedDate)}
+        <div className="p-4 sm:p-5 border-b border-slate-200 dark:border-slate-800 space-y-3">
+          <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3">
+            <div>
+              <div className="text-sm font-bold text-slate-900 dark:text-white">
+                {formatDateReadable(selectedDate)}
+              </div>
+              <div className="text-xs text-slate-500 mt-0.5 flex flex-wrap items-center gap-2">
+                <span>
+                  Menampilkan <strong>{modeRecords.length}</strong> pallet
+                </span>
+                <span aria-hidden="true">·</span>
+                <span>Edit Data/Bin/SJ: {kpiStats.editCount}</span>
+                <span aria-hidden="true">·</span>
+                <span>Outbound/Status: {kpiStats.statusChangeCount}</span>
+              </div>
             </div>
-            <div className="text-xs text-slate-500 mt-0.5 flex flex-wrap items-center gap-2">
-              <span>
-                Menampilkan <strong>{modeRecords.length}</strong> pallet
-              </span>
-              <span aria-hidden="true">·</span>
-              <span>Edit Data/Bin/SJ: {kpiStats.editCount}</span>
-              <span aria-hidden="true">·</span>
-              <span>Outbound/Status: {kpiStats.statusChangeCount}</span>
+
+            <div className="flex flex-wrap items-center gap-2">
+              {/* Segmented Mode Selector */}
+              <div className="flex flex-wrap rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden text-xs font-semibold">
+                <button
+                  type="button"
+                  onClick={() => setActivityMode('unchecked')}
+                  className={`px-3 py-2 transition-colors cursor-pointer whitespace-nowrap ${
+                    activityMode === 'unchecked'
+                      ? 'bg-amber-600 text-white'
+                      : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
+                  }`}
+                >
+                  Belum Dicek ({datePartition.uncheckedOnDate.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActivityMode('checked')}
+                  className={`px-3 py-2 transition-colors cursor-pointer whitespace-nowrap border-l border-slate-200 dark:border-slate-700 ${
+                    activityMode === 'checked'
+                      ? 'bg-emerald-600 text-white'
+                      : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
+                  }`}
+                >
+                  Sudah Dicek ({datePartition.checkedOnDate.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActivityMode('updated')}
+                  className={`px-3 py-2 transition-colors cursor-pointer whitespace-nowrap border-l border-slate-200 dark:border-slate-700 ${
+                    activityMode === 'updated'
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
+                  }`}
+                >
+                  Diupdate ({datePartition.updatedOnDate.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActivityMode('created')}
+                  className={`px-3 py-2 transition-colors cursor-pointer whitespace-nowrap border-l border-slate-200 dark:border-slate-700 ${
+                    activityMode === 'created'
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
+                  }`}
+                >
+                  Input Baru ({datePartition.createdOnDate.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActivityMode('all')}
+                  className={`px-3 py-2 transition-colors cursor-pointer whitespace-nowrap border-l border-slate-200 dark:border-slate-700 ${
+                    activityMode === 'all'
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
+                  }`}
+                >
+                  Semua ({datePartition.allOnDate.length})
+                </button>
+              </div>
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            {/* Segmented Mode Selector */}
-            <div className="flex rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden text-xs font-semibold">
-              <button
-                type="button"
-                onClick={() => setActivityMode('updated')}
-                className={`px-3 py-2 transition-colors cursor-pointer whitespace-nowrap ${
-                  activityMode === 'updated'
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
-                }`}
-              >
-                Diupdate ({datePartition.updatedOnDate.length})
-              </button>
-              <button
-                type="button"
-                onClick={() => setActivityMode('created')}
-                className={`px-3 py-2 transition-colors cursor-pointer whitespace-nowrap ${
-                  activityMode === 'created'
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
-                }`}
-              >
-                Input Baru ({datePartition.createdOnDate.length})
-              </button>
-              <button
-                type="button"
-                onClick={() => setActivityMode('all')}
-                className={`px-3 py-2 transition-colors cursor-pointer whitespace-nowrap ${
-                  activityMode === 'all'
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
-                }`}
-              >
-                Semua ({datePartition.allOnDate.length})
-              </button>
-            </div>
-
+          {/* Search, Status & Export */}
+          <div className="flex flex-wrap items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
             {/* Search */}
             <div className="relative">
               <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
@@ -665,8 +900,8 @@ export const PalletUpdateMonitorView: React.FC<PalletUpdateMonitorViewProps> = (
                 type="text"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                placeholder="Cari pallet, bin, SJ, aksi..."
-                className="text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg pl-8 pr-3 py-2 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 w-48 sm:w-56"
+                placeholder="Cari pallet, bin, batch, aksi..."
+                className="text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg pl-8 pr-3 py-1.5 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 w-48 sm:w-56"
               />
             </div>
 
@@ -677,7 +912,7 @@ export const PalletUpdateMonitorView: React.FC<PalletUpdateMonitorViewProps> = (
                   key={st}
                   type="button"
                   onClick={() => setStatusFilter(st)}
-                  className={`px-2.5 py-2 transition-colors cursor-pointer ${
+                  className={`px-2.5 py-1.5 transition-colors cursor-pointer ${
                     statusFilter === st
                       ? 'bg-slate-800 dark:bg-slate-700 text-white'
                       : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
@@ -695,7 +930,7 @@ export const PalletUpdateMonitorView: React.FC<PalletUpdateMonitorViewProps> = (
               onClick={() =>
                 exportPalletsToCsv(modeRecords, `monitoring_update_pallet_${selectedDate}`)
               }
-              className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-800 dark:text-slate-200 bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-lg transition-colors disabled:opacity-50 cursor-pointer"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-800 dark:text-slate-200 bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-lg transition-colors disabled:opacity-50 cursor-pointer"
             >
               <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
               <span>Ekspor CSV</span>
@@ -708,16 +943,22 @@ export const PalletUpdateMonitorView: React.FC<PalletUpdateMonitorViewProps> = (
           <div className="p-12 text-center">
             <PackageCheck className="w-12 h-12 text-slate-400 mx-auto mb-3 opacity-80" />
             <h3 className="text-sm font-bold text-slate-800 dark:text-slate-200">
-              Belum Ada Pallet yang{' '}
-              {activityMode === 'updated'
-                ? 'Diupdate'
-                : activityMode === 'created'
-                ? 'Diinput Baru'
-                : 'Beraktivitas'}{' '}
-              pada {formatDateReadable(selectedDate)}
+              {activityMode === 'unchecked'
+                ? `Semua Inputan Baru pada ${formatDateReadable(selectedDate)} Sudah Dicek`
+                : activityMode === 'checked'
+                ? `Belum Ada Pallet yang Ditandai Sudah Dicek pada ${formatDateReadable(selectedDate)}`
+                : `Belum Ada Pallet yang ${
+                    activityMode === 'updated'
+                      ? 'Diupdate'
+                      : activityMode === 'created'
+                      ? 'Diinput Baru'
+                      : 'Beraktivitas'
+                  } pada ${formatDateReadable(selectedDate)}`}
             </h3>
             <p className="text-xs text-slate-500 mt-1 max-w-md mx-auto">
-              Setiap perubahan data pallet (edit jumlah box, status QC, pindah Bin, oper gudang, perubahan batch, urutan Bin, outbound, Surat Jalan, atau penyelesaian Tasklist Pallet Problem) akan tercatat otomatis di sini beserta tanggal dan jam updatenya.
+              {activityMode === 'unchecked'
+                ? 'Semua inputan baru otomatis masuk ke daftar Belum Dicek ini, dan langsung berpindah ke Sudah Dicek setelah diedit/verifikasi. Data update tercatat di tab Diupdate.'
+                : 'Setiap perubahan data pallet (edit jumlah box, status QC, pindah Bin, oper gudang, perubahan batch, outbound, atau verifikasi monitoring) akan tercatat otomatis di sini.'}
             </p>
           </div>
         ) : (
@@ -727,7 +968,7 @@ export const PalletUpdateMonitorView: React.FC<PalletUpdateMonitorViewProps> = (
                 <tr>
                   <th className="py-3 px-3 text-center w-10">No</th>
                   <th className="py-3 px-3">Waktu Update</th>
-                  <th className="py-3 px-3">Aktivitas / Aksi</th>
+                  <th className="py-3 px-3">Aktivitas &amp; Status Cek</th>
                   <th className="py-3 px-3">No. Pallet &amp; Status</th>
                   <th className="py-3 px-3">Lokasi Bin</th>
                   <th className="py-3 px-3">Barang</th>
@@ -751,10 +992,22 @@ export const PalletUpdateMonitorView: React.FC<PalletUpdateMonitorViewProps> = (
                         : 'Update Data Pallet')
                     : 'Input Pallet Baru';
 
+                  const qtyNum = Number(item.qtyPallet) || 0;
+                  const isQtyNot15 = qtyNum !== 15;
+                  const dupInfo = duplicateInfoMap.get(item.id);
+                  const activeDupPeers = dupInfo?.activePeers || [];
+                  const historicalOutPeers = dupInfo?.historicalOutPeers || [];
+                  const hasActiveDup = activeDupPeers.length > 0;
+                  const hasRedAlert = isQtyNot15 || hasActiveDup;
+
                   return (
                     <tr
                       key={item.id}
-                      className="hover:bg-blue-50/40 dark:hover:bg-blue-950/20 transition-colors"
+                      className={`transition-colors ${
+                        hasRedAlert
+                          ? 'bg-red-50/50 dark:bg-red-950/20 hover:bg-red-100/50 dark:hover:bg-red-950/30 border-l-4 border-l-red-500'
+                          : 'hover:bg-blue-50/40 dark:hover:bg-blue-950/20'
+                      }`}
                     >
                       <td className="py-3 px-3 text-center font-mono font-bold text-slate-400">
                         {idx + 1}
@@ -775,12 +1028,45 @@ export const PalletUpdateMonitorView: React.FC<PalletUpdateMonitorViewProps> = (
                           <ArrowUpDown className="w-3 h-3 text-slate-400 shrink-0" />
                           <span>{actionLabel}</span>
                         </div>
+                        <div className="mt-1">
+                          {item.monitorChecked ? (
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-emerald-100 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 text-[10px] font-bold">
+                              <CheckCircle2 className="w-3 h-3" />
+                              <span>
+                                Sudah Dicek
+                                {item.monitorCheckedAt
+                                  ? ` · ${formatTimeOnly(item.monitorCheckedAt)}`
+                                  : ''}
+                              </span>
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-950/70 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-800 text-[10px] font-bold">
+                              <Clock className="w-3 h-3" />
+                              <span>Belum Dicek</span>
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td className="py-3 px-3">
                         <div className="flex flex-col items-start gap-1">
-                          <span className="font-mono font-bold px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-slate-100 border border-slate-300 dark:border-slate-700">
-                            {item.nomorPallet || '-'}
-                          </span>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span
+                              className={`font-mono font-bold px-2 py-0.5 rounded border ${
+                                hasActiveDup
+                                  ? 'bg-red-100 dark:bg-red-950 text-red-700 dark:text-red-300 border-red-300 dark:border-red-800'
+                                  : 'bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-slate-100 border-slate-300 dark:border-slate-700'
+                              }`}
+                            >
+                              {item.nomorPallet || '-'}
+                            </span>
+                            {hasActiveDup && (
+                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-red-600 text-white text-[10px] font-bold">
+                                <AlertTriangle className="w-3 h-3" />
+                                <span>DOUBLE ({activeDupPeers.length})</span>
+                              </span>
+                            )}
+                          </div>
+
                           <span
                             className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
                               isOut
@@ -790,6 +1076,26 @@ export const PalletUpdateMonitorView: React.FC<PalletUpdateMonitorViewProps> = (
                           >
                             {isOut ? `OUT (${item.tujuanPengambilan || '-'})` : 'IN (Aktif)'}
                           </span>
+
+                          {hasActiveDup && (
+                            <div className="mt-0.5 p-1.5 rounded bg-red-100/80 dark:bg-red-950/70 border border-red-300 dark:border-red-800 text-[10px] text-red-800 dark:text-red-200 space-y-0.5 max-w-[250px]">
+                              <div className="font-bold">Double dengan:</div>
+                              {activeDupPeers.map((peer) => (
+                                <div key={peer.id} className="font-mono leading-tight">
+                                  • Bin <strong>{peer.lokasiBin}</strong> · Batch{' '}
+                                  <strong>{peer.noBatch}</strong> ({peer.qtyPallet} {peer.unit} ·{' '}
+                                  {peer.status} · {peer.dateLabel})
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
+                          {!hasActiveDup && historicalOutPeers.length > 0 && (
+                            <div className="mt-0.5 text-[10px] text-slate-500 dark:text-slate-400 max-w-[240px]">
+                              Riwayat OUT: Bin {historicalOutPeers[0].lokasiBin} · Batch{' '}
+                              {historicalOutPeers[0].noBatch} ({historicalOutPeers[0].dateLabel})
+                            </div>
+                          )}
                         </div>
                       </td>
                       <td className="py-3 px-3 font-mono font-bold text-blue-700 dark:text-blue-400">
@@ -806,11 +1112,29 @@ export const PalletUpdateMonitorView: React.FC<PalletUpdateMonitorViewProps> = (
                           {item.kodeItem || '-'}
                         </div>
                       </td>
-                      <td className="py-3 px-3 text-right font-mono font-bold tabular-nums text-slate-900 dark:text-white whitespace-nowrap">
-                        {item.qtyPallet}{' '}
-                        <span className="font-sans font-normal text-slate-500">
-                          {item.unit}
-                        </span>
+                      <td className="py-3 px-3 text-right font-mono tabular-nums whitespace-nowrap">
+                        {isQtyNot15 ? (
+                          <div className="inline-flex flex-col items-end gap-1">
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-red-100 dark:bg-red-950/80 text-red-700 dark:text-red-300 border border-red-300 dark:border-red-800 font-black">
+                              <AlertTriangle className="w-3 h-3 shrink-0" />
+                              <span>
+                                {qtyNum} {item.unit}
+                              </span>
+                            </span>
+                            <span className="text-[10px] font-bold text-red-600 dark:text-red-400">
+                              {qtyNum < 15
+                                ? `Kurang ${15 - qtyNum} (≠ 15 Box)`
+                                : `Lebih +${qtyNum - 15} (≠ 15 Box)`}
+                            </span>
+                          </div>
+                        ) : (
+                          <span className="font-bold text-slate-900 dark:text-white">
+                            {qtyNum}{' '}
+                            <span className="font-sans font-normal text-slate-500">
+                              {item.unit}
+                            </span>
+                          </span>
+                        )}
                       </td>
                       <td className="py-3 px-3 font-mono text-[11px]">
                         {batches.length > 0 ? (
@@ -845,8 +1169,8 @@ export const PalletUpdateMonitorView: React.FC<PalletUpdateMonitorViewProps> = (
                             type="button"
                             onClick={() => handleOpenEdit(item)}
                             className="inline-flex items-center justify-center p-2 rounded-lg bg-blue-50 dark:bg-blue-950/60 hover:bg-blue-100 dark:hover:bg-blue-900 text-blue-600 dark:text-blue-400 border border-blue-200 dark:border-blue-800 transition-colors cursor-pointer"
-                            title={`Update data pallet ${item.nomorPallet}`}
-                            aria-label={`Update data pallet ${item.nomorPallet}`}
+                            title={`Update & cek data pallet ${item.nomorPallet}`}
+                            aria-label={`Update & cek data pallet ${item.nomorPallet}`}
                           >
                             <Pencil className="w-3.5 h-3.5" />
                           </button>
@@ -990,6 +1314,43 @@ export const PalletUpdateMonitorView: React.FC<PalletUpdateMonitorViewProps> = (
             </div>
 
             <form onSubmit={handleSaveEdit} className="space-y-4 text-xs">
+              {(Number(editingRecord.qtyPallet) !== 15 ||
+                editingDuplicatePeers.some((p) => p.isActiveConflict)) && (
+                <div className="space-y-2">
+                  {Number(editingRecord.qtyPallet) !== 15 && (
+                    <div className="flex items-center gap-2 p-2.5 rounded-lg bg-red-50 dark:bg-red-950/50 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800 font-semibold">
+                      <AlertTriangle className="w-4 h-4 shrink-0" />
+                      <span>
+                        Qty pallet saat ini{' '}
+                        <strong>
+                          {editingRecord.qtyPallet} {editingRecord.unit || 'Box'}
+                        </strong>{' '}
+                        (belum mencapai / tidak sama dengan standar 15 Box).
+                      </span>
+                    </div>
+                  )}
+                  {editingDuplicatePeers.some((p) => p.isActiveConflict) && (
+                    <div className="p-2.5 rounded-lg bg-red-50 dark:bg-red-950/50 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800 space-y-1">
+                      <div className="flex items-center gap-1.5 font-bold">
+                        <Copy className="w-4 h-4 shrink-0" />
+                        <span>
+                          No. Pallet {editingRecord.nomorPallet} terdeteksi DOUBLE dengan:
+                        </span>
+                      </div>
+                      {editingDuplicatePeers
+                        .filter((p) => p.isActiveConflict)
+                        .map((peer) => (
+                          <div key={peer.id} className="font-mono text-[11px] pl-5">
+                            • Bin <strong>{peer.lokasiBin}</strong> · Batch{' '}
+                            <strong>{peer.noBatch}</strong> ({peer.qtyPallet} {peer.unit} ·{' '}
+                            {peer.status} · {peer.dateLabel})
+                          </div>
+                        ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
               <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
                 <div className="sm:col-span-3">
                   <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
@@ -1382,6 +1743,23 @@ export const PalletUpdateMonitorView: React.FC<PalletUpdateMonitorViewProps> = (
                   className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-3 py-2 text-slate-900 dark:text-slate-100"
                 />
               </div>
+
+              <label className="flex items-start gap-2.5 p-3 rounded-xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={markCheckedOnSave}
+                  onChange={(e) => setMarkCheckedOnSave(e.target.checked)}
+                  className="mt-0.5 w-4 h-4 rounded border-emerald-400 text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+                />
+                <div>
+                  <div className="font-bold text-emerald-900 dark:text-emerald-200">
+                    Tandai pallet ini &quot;Sudah Dicek&quot; setelah disimpan
+                  </div>
+                  <div className="text-[11px] text-emerald-700 dark:text-emerald-400">
+                    Otomatis memindahkan pallet dari daftar Belum Dicek ke daftar Sudah Dicek agar mudah dipantau petugas.
+                  </div>
+                </div>
+              </label>
 
               {editError && (
                 <div className="flex items-center gap-2 p-2.5 rounded-lg bg-red-50 text-red-700 border border-red-200 font-semibold">

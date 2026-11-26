@@ -204,6 +204,8 @@ export interface PalletRecord {
   submittedAt: string;
   updatedAt?: string; // Timestamp terakhir kali data pallet ini diupdate
   lastUpdateAction?: string; // Keterangan aksi update terakhir (Edit Data, Outbound, Re-order, dll)
+  monitorChecked?: boolean; // Status cek di Monitoring Update (false/undefined = Belum Dicek, true = Sudah Dicek)
+  monitorCheckedAt?: string; // Timestamp saat pallet ditandai Sudah Dicek di Monitoring Update
   // Outbound / Pengambilan Produk tracking
   status?: 'IN' | 'OUT'; // Defaults to 'IN'
   tujuanPengambilan?: string; // 'SJA Sepanjang' | 'SJA Karawang' | 'SJA Sukodono' | 'SJA Semarang'

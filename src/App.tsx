@@ -2364,9 +2364,9 @@ export default function App() {
         d.getDate() === todayD
       );
     };
-    const palletCount = records.filter((r) => isToday(r.updatedAt || r.tanggalPengambilan)).length;
-    const sjCount = suratJalanHistory.filter((sj) => isToday(sj.updatedAt)).length;
-    return palletCount + sjCount;
+    return records.filter(
+      (r) => !r.monitorChecked && isToday(r.submittedAt)
+    ).length;
   })();
 
   const openMasterModal = (tab: MasterModalTabKey = 'tujuan_tarif') => {
